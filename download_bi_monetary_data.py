@@ -133,7 +133,14 @@ def parse_excel_for_adjusted_m0(
     Returns:
         pandas Series with DatetimeIndex (monthly) and values in billions IDR
     """
-    excel_file = pd.ExcelFile(io.BytesIO(excel_content), engine="xlrd")
+    # Detect file format and use appropriate engine
+    # xlsx files start with PK (ZIP signature), xls files start with D0 CF (OLE signature)
+    if excel_content[:2] == b'PK':
+        engine = "openpyxl"
+    else:
+        engine = "xlrd"
+    print(f"Using Excel engine: {engine}")
+    excel_file = pd.ExcelFile(io.BytesIO(excel_content), engine=engine)
     sheet_names = excel_file.sheet_names
     print(f"Available sheets: {sheet_names}")
 
@@ -565,7 +572,12 @@ def diagnose_excel_structure(
     Returns:
         DataFrame with column index, year, month, date, and extracted value
     """
-    excel_file = pd.ExcelFile(io.BytesIO(excel_content), engine="xlrd")
+    # Detect file format and use appropriate engine
+    if excel_content[:2] == b'PK':
+        engine = "openpyxl"
+    else:
+        engine = "xlrd"
+    excel_file = pd.ExcelFile(io.BytesIO(excel_content), engine=engine)
     sheet_names = excel_file.sheet_names
 
     # Find target sheet
