@@ -1,0 +1,14 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Cache directories
+buffer_bi_monetary/
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
