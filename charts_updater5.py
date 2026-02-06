@@ -3809,6 +3809,22 @@ mas_dli_ax1.set_ylim(top=1.5)
 mas_dli_ax1.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
 mas_dli_ax1.legend(loc="upper right", fontsize=9)
 
+# Add latest value labels for subplot 1
+mas_dli_proxy_last = mas_dli_df_all["Proxy_SORA_3m"].dropna()
+if len(mas_dli_proxy_last) > 0:
+    mas_dli_proxy_last_date = mas_dli_proxy_last.index[-1]
+    mas_dli_proxy_last_val = mas_dli_proxy_last.iloc[-1]
+    mas_dli_ax1.annotate(f"{mas_dli_proxy_last_val:.2f}", xy=(mas_dli_proxy_last_date, mas_dli_proxy_last_val),
+                         xytext=(5, 0), textcoords='offset points', fontsize=9, color=MAS_DLI_C_PROXY,
+                         bbox=dict(facecolor='white', edgecolor=MAS_DLI_C_PROXY, alpha=0.8, boxstyle='round,pad=0.2'))
+mas_dli_dli_last = mas_dli_df_all["MAS_DLI_3m"].dropna()
+if len(mas_dli_dli_last) > 0:
+    mas_dli_dli_last_date = mas_dli_dli_last.index[-1]
+    mas_dli_dli_last_val = mas_dli_dli_last.iloc[-1]
+    mas_dli_ax1.annotate(f"{mas_dli_dli_last_val:.2f}", xy=(mas_dli_dli_last_date, mas_dli_dli_last_val),
+                         xytext=(5, -15), textcoords='offset points', fontsize=9, color=MAS_DLI_C_DLI,
+                         bbox=dict(facecolor='white', edgecolor=MAS_DLI_C_DLI, alpha=0.8, boxstyle='round,pad=0.2'))
+
 # ---- Subplot 2: Stacked 3m with lines (since 2019) ----
 mas_dli_stacked_two_series_excel_like(
     ax=mas_dli_ax2,
@@ -3835,6 +3851,22 @@ mas_dli_ax2.set_ylim(-1.0, 1.5)
 mas_dli_ax2.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
 mas_dli_ax2.legend(loc="upper right", fontsize=9)
 
+# Add latest value labels for subplot 2
+mas_dli_proxy_last2 = mas_dli_df_chart2["Proxy_SORA_3m"].dropna()
+if len(mas_dli_proxy_last2) > 0:
+    mas_dli_proxy_last2_date = mas_dli_proxy_last2.index[-1]
+    mas_dli_proxy_last2_val = mas_dli_proxy_last2.iloc[-1]
+    mas_dli_ax2.annotate(f"{mas_dli_proxy_last2_val:.2f}", xy=(mas_dli_proxy_last2_date, mas_dli_proxy_last2_val),
+                         xytext=(5, 0), textcoords='offset points', fontsize=9, color=MAS_DLI_C_PROXY,
+                         bbox=dict(facecolor='white', edgecolor=MAS_DLI_C_PROXY, alpha=0.8, boxstyle='round,pad=0.2'))
+mas_dli_dli_last2 = mas_dli_df_chart2["MAS_DLI_3m"].dropna()
+if len(mas_dli_dli_last2) > 0:
+    mas_dli_dli_last2_date = mas_dli_dli_last2.index[-1]
+    mas_dli_dli_last2_val = mas_dli_dli_last2.iloc[-1]
+    mas_dli_ax2.annotate(f"{mas_dli_dli_last2_val:.2f}", xy=(mas_dli_dli_last2_date, mas_dli_dli_last2_val),
+                         xytext=(5, -15), textcoords='offset points', fontsize=9, color=MAS_DLI_C_DLI,
+                         bbox=dict(facecolor='white', edgecolor=MAS_DLI_C_DLI, alpha=0.8, boxstyle='round,pad=0.2'))
+
 # ---- Subplot 3: Monthly BC (last 2 years only) ----
 mas_dli_stacked_two_series_excel_like(
     ax=mas_dli_ax3,
@@ -3857,8 +3889,127 @@ plt.setp(mas_dli_ax3.get_xticklabels(), rotation=45, ha="right")
 mas_dli_ax3.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
 mas_dli_ax3.legend(loc="upper right", fontsize=9)
 
+# Add latest value label for subplot 3
+mas_dli_proxy_m_last = mas_dli_proxy_m_2y["Proxy_m"].dropna()
+if len(mas_dli_proxy_m_last) > 0:
+    mas_dli_proxy_m_last_date = mas_dli_proxy_m_last.index[-1]
+    mas_dli_proxy_m_last_val = mas_dli_proxy_m_last.iloc[-1]
+    mas_dli_ax3.annotate(f"{mas_dli_proxy_m_last_val:.2f}", xy=(mas_dli_proxy_m_last_date, mas_dli_proxy_m_last_val),
+                         xytext=(5, 0), textcoords='offset points', fontsize=9, color=MAS_DLI_C_PROXY,
+                         bbox=dict(facecolor='white', edgecolor=MAS_DLI_C_PROXY, alpha=0.8, boxstyle='round,pad=0.2'))
+
+# Add last data date annotation to the figure
+mas_dli_last_data_date = mas_dli_proxy_m_last_date.strftime('%d %b %Y') if len(mas_dli_proxy_m_last) > 0 else "N/A"
+mas_dli_fig.text(0.98, 0.98, f"Last data: {mas_dli_last_data_date}", transform=mas_dli_fig.transFigure,
+                 fontsize=10, ha='right', va='top',
+                 bbox=dict(facecolor='white', edgecolor='gray', alpha=0.9, boxstyle='round,pad=0.3'))
+
 plt.tight_layout()
 plt.savefig(MAS_DLI_OUTFILE, dpi=150, bbox_inches='tight')
 print(f"Saved MAS DLI chart to: {MAS_DLI_OUTFILE}")
 
 print("MAS DLI charts generated successfully.")
+
+# =============================================================================
+# KOREA MMF TOTAL AUM CHART
+# =============================================================================
+print("\n" + "="*60)
+print("Generating Korea MMF Total AUM chart...")
+print("="*60)
+
+# MMF Configuration
+MMF_CACHE_FILE = os.path.join(os.path.dirname(__file__), "mmf_aum_cache.csv")
+MMF_OUTFILE = os.path.join(G_CHART_DIR, "korea_mmf_aum.png")
+
+def load_mmf_cache():
+    """Load MMF data from cache file."""
+    if os.path.exists(MMF_CACHE_FILE):
+        df = pd.read_csv(MMF_CACHE_FILE, parse_dates=["date"])
+        df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+        return df
+    return pd.DataFrame(columns=["date", "mmf_total_aum"])
+
+def plot_mmf_chart_for_updater(df, output_path):
+    """Plot MMF Total AUM over time with last data annotation and latest value label."""
+    if df.empty:
+        print("No MMF data to plot")
+        return
+
+    df = df.sort_values("date").copy()
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.drop_duplicates(subset=["date"], keep="last")
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    # Plot as line with segments (break at gaps > 5 days)
+    dates = df["date"].values
+    values = df["mmf_total_aum"].values
+
+    segments_x = []
+    segments_y = []
+    current_x = [dates[0]]
+    current_y = [values[0]]
+
+    for i in range(1, len(dates)):
+        gap_days = (pd.Timestamp(dates[i]) - pd.Timestamp(dates[i-1])).days
+        if gap_days > 5:
+            segments_x.append(current_x)
+            segments_y.append(current_y)
+            current_x = [dates[i]]
+            current_y = [values[i]]
+        else:
+            current_x.append(dates[i])
+            current_y.append(values[i])
+
+    segments_x.append(current_x)
+    segments_y.append(current_y)
+
+    # Plot each segment
+    for seg_x, seg_y in zip(segments_x, segments_y):
+        ax.plot(seg_x, seg_y, linewidth=1.0, color="#1f77b4")
+
+    # Add light fill under the data
+    ax.fill_between(df["date"], df["mmf_total_aum"], alpha=0.1, color="#1f77b4")
+
+    ax.set_title("Korea MMF Total AUM Over Time", fontsize=14, fontweight="bold")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("MMF Total AUM")
+
+    # Format y-axis with commas
+    from matplotlib.ticker import FuncFormatter
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda x, p: f"{x:,.0f}"))
+
+    # Format x-axis dates
+    ax.xaxis.set_major_locator(mdates.YearLocator())
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+    ax.xaxis.set_minor_locator(mdates.MonthLocator(bymonth=[1, 4, 7, 10]))
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim(df["date"].min(), df["date"].max())
+
+    # Add last data date annotation
+    last_date = df["date"].max()
+    last_val = df.loc[df["date"] == last_date, "mmf_total_aum"].values[0]
+    fig.text(0.98, 0.98, f"Last data: {last_date.strftime('%d %b %Y')}", transform=fig.transFigure,
+             fontsize=10, ha='right', va='top',
+             bbox=dict(facecolor='white', edgecolor='gray', alpha=0.9, boxstyle='round,pad=0.3'))
+
+    # Add latest value annotation
+    ax.annotate(f"{last_val:,.0f}", xy=(last_date, last_val),
+                xytext=(5, 0), textcoords='offset points', fontsize=9, color="#1f77b4",
+                bbox=dict(facecolor='white', edgecolor="#1f77b4", alpha=0.8, boxstyle='round,pad=0.2'))
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    print(f"Saved MMF chart to: {output_path}")
+    plt.close()
+
+# Load and plot MMF data
+mmf_df = load_mmf_cache()
+if len(mmf_df) > 0:
+    print(f"Loaded {len(mmf_df)} MMF records from cache")
+    plot_mmf_chart_for_updater(mmf_df, MMF_OUTFILE)
+    print("Korea MMF chart generated successfully.")
+else:
+    print("No MMF data in cache. Run crawl_mmf_aum.py to fetch data first.")
