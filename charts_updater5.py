@@ -3945,7 +3945,7 @@ MMF_CACHE_FILE = MMF_SCRIPT_DIR / "mmf_aum_cache.csv"
 MMF_OUTFILE = Path(G_CHART_DIR) / "korea_mmf_aum.png"
 
 def plot_mmf_chart_for_updater(df, output_path):
-    """Plot MMF Total AUM over time with last data annotation and latest value label."""
+    """Plot MMF Total AUM (last 1 year) with 30-day change subplot. Units in KRW trillion."""
     if df.empty:
         print("No MMF data to plot")
         return
@@ -3954,19 +3954,36 @@ def plot_mmf_chart_for_updater(df, output_path):
     df["date"] = pd.to_datetime(df["date"])
     df = df.drop_duplicates(subset=["date"], keep="last")
 
-    fig, ax = plt.subplots(figsize=(14, 6))
+    # Convert units: 100 million KRW -> KRW trillion (divide by 10000)
+    df["mmf_aum_tn"] = df["mmf_total_aum"] / 10000.0
+
+    # Filter to last 1 year
+    one_year_ago = pd.Timestamp.today().normalize() - pd.DateOffset(years=1)
+    df_1y = df[df["date"] >= one_year_ago].copy()
+
+    if df_1y.empty:
+        print("No MMF data in the last year")
+        return
+
+    # Calculate 30 calendar day change
+    df_1y = df_1y.set_index("date").sort_index()
+    df_1y["change_30d"] = df_1y["mmf_aum_tn"].diff(30)  # Approximate 30 calendar days
+
+    # Create figure with 2 subplots
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), height_ratios=[1.2, 1])
+
+    # --- Subplot 1: MMF Total AUM (last 1 year) ---
+    dates = df_1y.index
+    values = df_1y["mmf_aum_tn"].values
 
     # Plot as line with segments (break at gaps > 5 days)
-    dates = df["date"].values
-    values = df["mmf_total_aum"].values
-
     segments_x = []
     segments_y = []
     current_x = [dates[0]]
     current_y = [values[0]]
 
     for i in range(1, len(dates)):
-        gap_days = (pd.Timestamp(dates[i]) - pd.Timestamp(dates[i-1])).days
+        gap_days = (dates[i] - dates[i-1]).days
         if gap_days > 5:
             segments_x.append(current_x)
             segments_y.append(current_y)
@@ -3981,39 +3998,65 @@ def plot_mmf_chart_for_updater(df, output_path):
 
     # Plot each segment
     for seg_x, seg_y in zip(segments_x, segments_y):
-        ax.plot(seg_x, seg_y, linewidth=1.0, color="#1f77b4")
+        ax1.plot(seg_x, seg_y, linewidth=1.5, color="#1f77b4")
 
     # Add light fill under the data
-    ax.fill_between(df["date"], df["mmf_total_aum"], alpha=0.1, color="#1f77b4")
+    ax1.fill_between(df_1y.index, df_1y["mmf_aum_tn"], alpha=0.1, color="#1f77b4")
 
-    ax.set_title("Korea MMF Total AUM Over Time", fontsize=14, fontweight="bold")
-    ax.set_xlabel("Date")
-    ax.set_ylabel("MMF Total AUM")
+    ax1.set_title("Korea MMF Total AUM (in KRW tn) - Last 1 Year", fontsize=14, fontweight="bold")
+    ax1.set_ylabel("MMF Total AUM (KRW tn)")
 
-    # Format y-axis with commas
+    # Format y-axis with 1 decimal
     from matplotlib.ticker import FuncFormatter
-    ax.yaxis.set_major_formatter(FuncFormatter(lambda x, p: f"{x:,.0f}"))
+    ax1.yaxis.set_major_formatter(FuncFormatter(lambda x, p: f"{x:,.1f}"))
 
     # Format x-axis dates
-    ax.xaxis.set_major_locator(mdates.YearLocator())
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
-    ax.xaxis.set_minor_locator(mdates.MonthLocator(bymonth=[1, 4, 7, 10]))
-    plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+    ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+    plt.setp(ax1.get_xticklabels(), rotation=45, ha="right")
 
-    ax.grid(True, alpha=0.3)
-    ax.set_xlim(df["date"].min(), df["date"].max())
+    ax1.grid(True, alpha=0.3)
+    ax1.set_xlim(df_1y.index.min(), df_1y.index.max())
 
-    # Add last data date annotation
-    last_date = df["date"].max()
-    last_val = df.loc[df["date"] == last_date, "mmf_total_aum"].values[0]
+    # Add latest value annotation
+    last_date = df_1y.index[-1]
+    last_val = df_1y["mmf_aum_tn"].iloc[-1]
+    ax1.annotate(f"{last_val:,.1f}", xy=(last_date, last_val),
+                xytext=(5, 0), textcoords='offset points', fontsize=10, color="#1f77b4",
+                bbox=dict(facecolor='white', edgecolor="#1f77b4", alpha=0.8, boxstyle='round,pad=0.2'))
+
+    # --- Subplot 2: 30-Day Change ---
+    change_data = df_1y["change_30d"].dropna()
+    if not change_data.empty:
+        # Color bars based on positive/negative
+        colors = ['#2ca02c' if x >= 0 else '#d62728' for x in change_data.values]
+        ax2.bar(change_data.index, change_data.values, color=colors, alpha=0.7, width=1)
+        ax2.axhline(0, color='black', linewidth=0.8)
+
+        ax2.set_title("30-Day Change (in KRW tn)", fontsize=12, fontweight="bold")
+        ax2.set_ylabel("Change (KRW tn)")
+        ax2.yaxis.set_major_formatter(FuncFormatter(lambda x, p: f"{x:,.1f}"))
+
+        # Format x-axis dates
+        ax2.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+        ax2.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+        plt.setp(ax2.get_xticklabels(), rotation=45, ha="right")
+
+        ax2.grid(True, alpha=0.3, axis='y')
+        ax2.set_xlim(df_1y.index.min(), df_1y.index.max())
+
+        # Add latest change value annotation
+        last_change_date = change_data.index[-1]
+        last_change_val = change_data.iloc[-1]
+        change_color = '#2ca02c' if last_change_val >= 0 else '#d62728'
+        ax2.annotate(f"{last_change_val:+,.1f}", xy=(last_change_date, last_change_val),
+                    xytext=(5, 0), textcoords='offset points', fontsize=10, color=change_color,
+                    bbox=dict(facecolor='white', edgecolor=change_color, alpha=0.8, boxstyle='round,pad=0.2'))
+
+    # Add last data date annotation to figure
     fig.text(0.98, 0.98, f"Last data: {last_date.strftime('%d %b %Y')}", transform=fig.transFigure,
              fontsize=10, ha='right', va='top',
              bbox=dict(facecolor='white', edgecolor='gray', alpha=0.9, boxstyle='round,pad=0.3'))
-
-    # Add latest value annotation
-    ax.annotate(f"{last_val:,.0f}", xy=(last_date, last_val),
-                xytext=(5, 0), textcoords='offset points', fontsize=9, color="#1f77b4",
-                bbox=dict(facecolor='white', edgecolor="#1f77b4", alpha=0.8, boxstyle='round,pad=0.2'))
 
     plt.tight_layout()
     plt.savefig(str(output_path), dpi=150, bbox_inches="tight")
