@@ -1646,30 +1646,80 @@ roll_corr_es  = rolling_corr_time_capped(ret_blk['XAUUSD'], ret_blk['ESA'],    R
 roll_corr_km  = rolling_corr_time_capped(ret_blk['XAUUSD'], ret_blk['KMA'],    ROLL_WIN, MAX_SPAN)
 roll_corr_aud = rolling_corr_time_capped(ret_blk['XAUUSD'], ret_blk['AUDUSD'], ROLL_WIN, MAX_SPAN)
 
+# --- Convert to SGT, remove periods with no data ---
+corr_df = pd.DataFrame({
+    'XAUUSD vs ESA':    roll_corr_es,
+    'XAUUSD vs KMA':    roll_corr_km,
+    'XAUUSD vs AUDUSD': roll_corr_aud,
+})
+corr_df.index = corr_df.index.tz_convert('Asia/Singapore')
+corr_df = corr_df.dropna(how='all')  # drop timestamps where ALL series are NaN
+
 # --- Last updated (SGT) ---
 last_ts  = _last_plotted_timestamp(roll_corr_es, roll_corr_km, roll_corr_aud)
 last_sgt = (last_ts.tz_convert('Asia/Singapore').strftime('%Y-%m-%d %H:%M %Z')
             if last_ts is not None else 'n/a')
 last_updated_text = f"Last Updated: {last_sgt} SGT"
 
-# --- Plot all three correlations in one subplot ---
-fig, ax = plt.subplots(figsize=(12, 6))
-ax.plot(roll_corr_es.index,  roll_corr_es.values,  label='XAUUSD vs ESA',    color='tab:blue')
-ax.plot(roll_corr_km.index,  roll_corr_km.values,  label='XAUUSD vs KMA',    color='tab:orange')
-ax.plot(roll_corr_aud.index, roll_corr_aud.values,  label='XAUUSD vs AUDUSD', color='tab:green')
-ax.axhline(0, color='gray', lw=1, linestyle='--')
-ax.set_title('Intraday Rolling 2H Correlation (3-min bars): XAUUSD vs ESA / KMA / AUDUSD')
-ax.set_ylabel('Correlation')
-ax.legend(loc='upper right')
-ax.grid(True, alpha=0.3)
-ax.xaxis.set_major_locator(mdates.DayLocator())
-ax.xaxis.set_major_formatter(DateFormatter('%b %d'))
-ax.xaxis.set_minor_locator(mdates.HourLocator(interval=2))
-ax.xaxis.set_minor_formatter(DateFormatter('%H:%M'))
-ax.tick_params(axis='x', which='major', rotation=45, labelsize=9, pad=15)
-ax.tick_params(axis='x', which='minor', rotation=45, labelsize=7)
+def _setup_intraday_corr_ax(ax, corr_sub):
+    """Plot correlation lines on a gap-free positional x-axis with SGT labels."""
+    sgt_idx    = corr_sub.index
+    pos        = np.arange(len(corr_sub))
+    dates_only = sgt_idx.normalize()
+
+    # Plot the three correlation lines
+    ax.plot(pos, corr_sub['XAUUSD vs ESA'].values,
+            label='XAUUSD vs ESA',    color='tab:blue')
+    ax.plot(pos, corr_sub['XAUUSD vs KMA'].values,
+            label='XAUUSD vs KMA',    color='tab:orange')
+    ax.plot(pos, corr_sub['XAUUSD vs AUDUSD'].values,
+            label='XAUUSD vs AUDUSD', color='tab:green')
+    ax.axhline(0, color='gray', lw=1, linestyle='--')
+
+    # Thin grey vertical lines at day boundaries
+    unique_dates = dates_only.unique()
+    for d in unique_dates[1:]:
+        first_pos = pos[dates_only == d][0]
+        ax.axvline(first_pos, color='lightgrey', lw=0.8, zorder=0)
+
+    # Major ticks: one per day at first bar of that day
+    major_pos = [int(pos[dates_only == d][0]) for d in unique_dates]
+    major_lbl = [d.strftime('%b %d') for d in unique_dates]
+    ax.set_xticks(major_pos)
+    ax.set_xticklabels(major_lbl, fontsize=9, rotation=45, ha='right')
+
+    # Minor ticks: every 2 hours (SGT)
+    minor_pos, minor_lbl, _prev_key = [], [], None
+    for i, t in enumerate(sgt_idx):
+        key = (t.date(), t.hour // 2 * 2)
+        if key != _prev_key:
+            minor_pos.append(int(pos[i]))
+            minor_lbl.append(f"{key[1]:02d}:00")
+            _prev_key = key
+    ax.set_xticks(minor_pos, minor=True)
+    ax.set_xticklabels(minor_lbl, fontsize=7, rotation=45, ha='right', minor=True)
+    ax.tick_params(axis='x', which='major', pad=15)
+
+    ax.set_ylabel('Correlation')
+    ax.legend(loc='upper right')
+    ax.grid(True, alpha=0.3)
+    ax.set_xlabel('Time (SGT)')
+
+# --- Two subplots: full period + last 2 days magnified ---
+fig, (ax_full, ax_zoom) = plt.subplots(2, 1, figsize=(14, 10))
+
+# Top subplot: full 10-day view
+_setup_intraday_corr_ax(ax_full, corr_df)
+ax_full.set_title('Intraday Rolling 2H Correlation (3-min bars): XAUUSD vs ESA / KMA / AUDUSD')
+
+# Bottom subplot: last 2 SGT calendar days (magnified)
+_last_2_dates = corr_df.index.normalize().unique()[-2:]
+corr_zoom = corr_df[corr_df.index.normalize() >= _last_2_dates[0]]
+_setup_intraday_corr_ax(ax_zoom, corr_zoom)
+ax_zoom.set_title('Last 2 Days (Magnified)')
+
 fig.text(
-    0.99, 0.98, last_updated_text,
+    0.99, 0.99, last_updated_text,
     ha='right', va='top',
     bbox=dict(boxstyle='round', facecolor='white', edgecolor='0.5', alpha=0.85),
     fontsize=9)
@@ -1678,7 +1728,8 @@ plt.savefig(Path(G_CHART_DIR, "XAUUSD_vs_ES_KM_AUD_Intraday_Correlation.png"), b
 
 # Cleanup
 del (gold_tkr, es_tkr, km_tkr, aud_tkr, gold_min, es_min, km_min, aud_min,
-     px_min, px_block, ret_blk, roll_corr_es, roll_corr_km, roll_corr_aud)
+     px_min, px_block, ret_blk, roll_corr_es, roll_corr_km, roll_corr_aud,
+     corr_df, corr_zoom)
 
 
 # # ## Rolling 10d 4hourly correlation (USDCNH vs CGB Futs)
