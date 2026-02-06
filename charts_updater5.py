@@ -3758,21 +3758,30 @@ MAS_DLI_OUTFILE = G_CHART_DIR / "MAS_DLI_Charts.png"
 
 # 1) Load DLI (monthly index, already 3m change series) from CSV
 mas_dli_3m = mas_dli_load_dli_csv(MAS_DLI_CSV_PATH)
+print(f"MAS DLI CSV loaded: {len(mas_dli_3m)} points, range {mas_dli_3m.index.min()} to {mas_dli_3m.index.max()}")
 
 # 2) Pull daily from Bloomberg and convert to monthly
 mas_dli_daily = mas_dli_fetch_daily_bbg([MAS_DLI_TICKER_NEER, MAS_DLI_TICKER_SORA], MAS_DLI_START_DATE, MAS_DLI_END_DATE)
 mas_dli_m = mas_dli_to_monthly_bm_last(mas_dli_daily)
+print(f"Bloomberg monthly data: {len(mas_dli_m)} points, range {mas_dli_m.index.min()} to {mas_dli_m.index.max()}")
 
 # 3) Compute proxy (3m) & monthly proxy (BC)
 mas_dli_proxy_3m = mas_dli_compute_proxy_3m(mas_dli_m[MAS_DLI_TICKER_NEER], mas_dli_m[MAS_DLI_TICKER_SORA])
 mas_dli_proxy_m = mas_dli_compute_proxy_monthly_bc(mas_dli_m[MAS_DLI_TICKER_NEER], mas_dli_m[MAS_DLI_TICKER_SORA])
 
-# 4) Combine for chart 1 & 2.
+# 4) Normalize timestamps to ensure proper join
+# Convert both indexes to the same format (Period -> start timestamp)
+mas_dli_proxy_3m.index = mas_dli_proxy_3m.index.to_period('M').to_timestamp()
+mas_dli_3m.index = mas_dli_3m.index.to_period('M').to_timestamp()
+
+# 5) Combine for chart 1 & 2.
 # IMPORTANT: use proxy index as the master index so proxy plots to latest even if DLI ends earlier.
 mas_dli_df_all = mas_dli_proxy_3m.join(mas_dli_3m.rename("MAS_DLI_3m"), how="left")
+print(f"After join: MAS_DLI_3m non-null count = {mas_dli_df_all['MAS_DLI_3m'].notna().sum()}")
 
 # drop early rows where 3m proxy can't be computed yet
 mas_dli_df_all = mas_dli_df_all.dropna(subset=["Proxy_SORA_3m", "NEER_contrib_3m", "SORA_contrib_3m"], how="any")
+print(f"After dropna: {len(mas_dli_df_all)} rows, MAS_DLI_3m non-null = {mas_dli_df_all['MAS_DLI_3m'].notna().sum()}")
 
 # Prepare data for charts
 mas_dli_df_chart2 = mas_dli_df_all[mas_dli_df_all.index >= pd.Timestamp("2019-01-01")].copy()
@@ -3786,6 +3795,7 @@ mas_dli_proxy_m_2y = mas_dli_proxy_m[mas_dli_proxy_m.index >= mas_dli_two_years_
 mas_dli_fig, (mas_dli_ax1, mas_dli_ax2, mas_dli_ax3) = plt.subplots(3, 1, figsize=(14, 15))
 
 # ---- Subplot 1: MAS DLI vs Proxy ----
+# Plot proxy first (extends to latest), then DLI on top
 mas_dli_ax1.plot(mas_dli_df_all.index, mas_dli_df_all["Proxy_SORA_3m"], color=MAS_DLI_C_PROXY, linewidth=MAS_DLI_LINE_W,
         label="Proxy (60% S$NEER & 40% SORA, variance scaled)")
 mas_dli_ax1.plot(mas_dli_df_all.index, mas_dli_df_all["MAS_DLI_3m"], color=MAS_DLI_C_DLI, linewidth=MAS_DLI_LINE_W,
@@ -3811,6 +3821,7 @@ mas_dli_stacked_two_series_excel_like(
     color_b=MAS_DLI_C_SORA_BAR,
     width_days=MAS_DLI_BAR_WIDTH_DAYS,
 )
+# Overlay lines on top of bars
 mas_dli_ax2.plot(mas_dli_df_chart2.index, mas_dli_df_chart2["MAS_DLI_3m"], color=MAS_DLI_C_DLI, linewidth=MAS_DLI_LINE_W, label="MAS DLI")
 mas_dli_ax2.plot(mas_dli_df_chart2.index, mas_dli_df_chart2["Proxy_SORA_3m"], color=MAS_DLI_C_PROXY, linewidth=MAS_DLI_LINE_W,
         label="Proxy (60% S$NEER & 40% SORA, variance scaled)")
