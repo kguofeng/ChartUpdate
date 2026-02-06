@@ -2961,8 +2961,9 @@ TICKERS = {
     'IDM2YOY Index':  'M2 YoY',
 }
 
-START_DATE = datetime(2015, 1, 1)
+START_DATE = datetime(2019, 1, 1)  # Need data from 2019 to compute YoY for 2020
 END_DATE   = datetime.today()
+PLOT_START = datetime(2020, 1, 1)  # Only plot from 2020 onwards
 
 SAVE_PATH = Path(G_CHART_DIR) if 'G_CHART_DIR' in globals() else Path.cwd()
 OUTFILE   = SAVE_PATH / "Indonesia_MoneySupply_YoY.png"
@@ -3018,6 +3019,9 @@ plot_df = pd.DataFrame(index=full_idx)
 plot_df['M1 YoY']         = df['M1 YoY'].reindex(full_idx)
 plot_df['M2 YoY']         = df['M2 YoY'].reindex(full_idx)
 plot_df['Base Money YoY'] = base_yoy.reindex(full_idx)
+
+# Filter to only show data from 2020 onwards
+plot_df = plot_df[plot_df.index >= PLOT_START]
 
 # Last date with any data
 last_data_date = plot_df.dropna(how='all').index.max()

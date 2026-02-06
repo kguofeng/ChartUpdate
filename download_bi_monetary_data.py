@@ -454,7 +454,7 @@ def get_adjusted_m0_data(
         cache_mtime = datetime.fromtimestamp(CACHE_FILE.stat().st_mtime)
         cache_age_days = (datetime.now() - cache_mtime).days
 
-        if cache_age_days < 30:  # Cache valid for 30 days
+        if cache_age_days < 7:  # Cache valid for 7 days (weekly refresh)
             print(f"Loading cached data from {CACHE_FILE} (age: {cache_age_days} days)")
             with open(CACHE_FILE, 'rb') as f:
                 return pickle.load(f)
