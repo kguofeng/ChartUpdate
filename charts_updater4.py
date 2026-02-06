@@ -1618,25 +1618,35 @@ es_min   = pull_intraday_minutes_last_n_days(es_tkr,   lookback_days, ref=ref_ti
 km_min   = pull_intraday_minutes_last_n_days(km_tkr,   lookback_days, ref=ref_ticker)
 aud_min  = pull_intraday_minutes_last_n_days(aud_tkr,  lookback_days, ref=ref_ticker)
 
-# --- Align each pair with gold separately (maximise data per pair) ---
-def _pair_returns(s_gold, s_other, block_min):
-    """Align gold with one counterpart, sample blocks, return log-returns."""
-    px = align_minutes(s_gold, s_other, method='ffill')
-    px = last_every_n_minutes(px, block_min)
-    return np.log(px).diff().dropna()
+# --- Align all four on a COMMON minute grid (keep partial rows) ---
+def _to_minute_last(s):
+    s = s.copy()
+    s.index = s.index.floor('T')
+    return s[~s.index.duplicated(keep='last')]
 
-ret_gold_es  = _pair_returns(gold_min, es_min,  block_minutes)
-ret_gold_km  = _pair_returns(gold_min, km_min,  block_minutes)
-ret_gold_aud = _pair_returns(gold_min, aud_min, block_minutes)
+_series  = [gold_min, es_min, km_min, aud_min]
+_cleaned = [_to_minute_last(s) for s in _series]
+_idx = _cleaned[0].index
+for _s in _cleaned[1:]:
+    _idx = _idx.union(_s.index)
+_idx = _idx.sort_values()
+px_min = pd.concat([s.reindex(_idx) for s in _cleaned], axis=1)
+px_min.columns = [gold_tkr, es_tkr, km_tkr, aud_tkr]
+px_min = px_min.ffill(limit=3).dropna(how='all')   # keep rows with ANY data
 
-ret_gold_es.columns  = ['XAUUSD', 'ESA']
-ret_gold_km.columns  = ['XAUUSD', 'KMA']
-ret_gold_aud.columns = ['XAUUSD', 'AUDUSD']
+# --- Sample every 3 minutes on the common grid, log-returns ---
+px_block = last_every_n_minutes(px_min, block_minutes)
+ret_blk  = np.log(px_block).diff()                  # keep NaN where data missing
+
+ren = {gold_tkr: 'XAUUSD', es_tkr: 'ESA', km_tkr: 'KMA', aud_tkr: 'AUDUSD'}
+ret_blk = ret_blk.rename(columns=ren)
 
 # --- Rolling correlations (time-capped at 2h15m) ---
-roll_corr_es  = rolling_corr_time_capped(ret_gold_es['XAUUSD'],  ret_gold_es['ESA'],     ROLL_WIN, MAX_SPAN)
-roll_corr_km  = rolling_corr_time_capped(ret_gold_km['XAUUSD'],  ret_gold_km['KMA'],     ROLL_WIN, MAX_SPAN)
-roll_corr_aud = rolling_corr_time_capped(ret_gold_aud['XAUUSD'], ret_gold_aud['AUDUSD'], ROLL_WIN, MAX_SPAN)
+# rolling_corr_time_capped internally drops NaN per pair, so each pair
+# uses all timestamps where BOTH its assets have data.
+roll_corr_es  = rolling_corr_time_capped(ret_blk['XAUUSD'], ret_blk['ESA'],    ROLL_WIN, MAX_SPAN)
+roll_corr_km  = rolling_corr_time_capped(ret_blk['XAUUSD'], ret_blk['KMA'],    ROLL_WIN, MAX_SPAN)
+roll_corr_aud = rolling_corr_time_capped(ret_blk['XAUUSD'], ret_blk['AUDUSD'], ROLL_WIN, MAX_SPAN)
 
 # --- Convert to SGT, remove periods with no data ---
 corr_df = pd.DataFrame({
@@ -1720,7 +1730,7 @@ plt.savefig(Path(G_CHART_DIR, "XAUUSD_vs_ES_KM_AUD_Intraday_Correlation.png"), b
 
 # Cleanup
 del (gold_tkr, es_tkr, km_tkr, aud_tkr, gold_min, es_min, km_min, aud_min,
-     ret_gold_es, ret_gold_km, ret_gold_aud,
+     px_min, px_block, ret_blk,
      roll_corr_es, roll_corr_km, roll_corr_aud, corr_df, corr_zoom)
 
 
