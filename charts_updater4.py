@@ -1602,7 +1602,7 @@ del (cnh_tkr, aud_tkr, cnh_min, aud_min, dxy_min,
 
 
 # ## Intraday Rolling 2H Correlation: XAUUSD vs ESA / KMA / AUDUSD (3-min bars)
-lookback_days   = 120
+lookback_days   = 10
 ref_ticker      = 'ES1 Index'
 gold_tkr        = 'XAUUSD Curncy'
 es_tkr          = 'ESA Index'
@@ -1662,8 +1662,12 @@ ax.set_title('Intraday Rolling 2H Correlation (3-min bars): XAUUSD vs ESA / KMA 
 ax.set_ylabel('Correlation')
 ax.legend(loc='upper right')
 ax.grid(True, alpha=0.3)
-ax.xaxis.set_major_locator(WeekdayLocator(byweekday=MO, interval=1))
+ax.xaxis.set_major_locator(mdates.DayLocator())
 ax.xaxis.set_major_formatter(DateFormatter('%b %d'))
+ax.xaxis.set_minor_locator(mdates.HourLocator(interval=2))
+ax.xaxis.set_minor_formatter(DateFormatter('%H:%M'))
+ax.tick_params(axis='x', which='major', rotation=45, labelsize=9, pad=15)
+ax.tick_params(axis='x', which='minor', rotation=45, labelsize=7)
 fig.text(
     0.99, 0.98, last_updated_text,
     ha='right', va='top',
