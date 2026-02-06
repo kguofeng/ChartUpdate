@@ -19,7 +19,15 @@ import matplotlib.dates as mdates
 from matplotlib.colors import TwoSlopeNorm
 from matplotlib.ticker import FormatStrFormatter
 from xbbg import blp
-import statsmodels.api as sm
+# Lazy import for statsmodels due to scipy compatibility issues in Python 3.13
+try:
+    import statsmodels.api as sm
+    STATSMODELS_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: statsmodels import failed ({e}). Some charts may not be generated.")
+    print("To fix: pip install --upgrade statsmodels scipy")
+    sm = None
+    STATSMODELS_AVAILABLE = False
 from pandas.tseries.offsets import CustomBusinessDay
 from download_bi_monetary_data import get_adjusted_m0_data, compute_yoy_growth
 
@@ -542,15 +550,15 @@ del (retail_raw, wholesale_raw, soft_now_raw, soft_exp_raw,
 FIELD       = 'PX_LAST'
 START_DATE  = datetime(2020, 1, 1)
 END_DATE    = datetime.today()
-ROLL_WIN    = 63  
+ROLL_WIN    = 63
 SAVE_PATH   = Path(G_CHART_DIR) if 'G_CHART_DIR' in globals() else Path.cwd()
 OUTFILE     = SAVE_PATH / "DXY_Rolling_Attribution.png"
 TICKERS = {
     'DXY':     'DXY Index',
     'SPX':     'SPX Index',
     'VIX':     'VIX Index',
-    'US10Y':   'USOSFR10 Index',        
-    'US1Y1Y':  'S0042FS 1Y1Y BLC Curncy',  
+    'US10Y':   'USOSFR10 Index',
+    'US1Y1Y':  'S0042FS 1Y1Y BLC Curncy',
 }
 
 def bdh_flat(tickers, field=FIELD, start=START_DATE, end=END_DATE):
@@ -588,6 +596,11 @@ def rolling_two_stage(df, y_col, x_stage1, x_stage2_list, win):
       2) residuals(y|x_stage1) ~ x_stage2 -> R2_stage2 (one series per x_stage2)
     Returns: DataFrame with columns ['R2_stage1', f'R2_{x_stage2}', ...]
     """
+    # Check if statsmodels is available
+    if not STATSMODELS_AVAILABLE or sm is None:
+        print("Warning: statsmodels not available, skipping rolling_two_stage regression")
+        return pd.DataFrame(columns=['R2_stage1'] + [f'R2_{x}' for x in x_stage2_list])
+
     idx = []
     series = {'R2_stage1': []}
     for x2 in x_stage2_list:
@@ -595,7 +608,7 @@ def rolling_two_stage(df, y_col, x_stage1, x_stage2_list, win):
     n = len(df)
     for i in range(win, n + 1):
         sub = df.iloc[i - win:i][[y_col, x_stage1] + x_stage2_list].dropna()
-        if len(sub) < 20:  
+        if len(sub) < 20:
             continue
         y  = sub[y_col].values
         X1 = sm.add_constant(sub[[x_stage1]].values, has_constant='add')
