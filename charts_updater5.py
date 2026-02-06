@@ -3543,7 +3543,11 @@ def mas_dli_to_monthly_bm_last(df_daily: pd.DataFrame) -> pd.DataFrame:
     Resample daily to business-month-end (last obs),
     then normalize index to month-start timestamps for clean labeling.
     """
-    m = df_daily.resample("BM").last()
+    # Handle both old and new pandas frequency aliases
+    try:
+        m = df_daily.resample("BME").last()  # pandas >= 2.2
+    except ValueError:
+        m = df_daily.resample("BM").last()   # pandas < 2.2
     m.index = m.index.to_period("M").to_timestamp()
     return m
 
@@ -3749,10 +3753,8 @@ def mas_dli_plot_chart3_monthly_bc(df_m: pd.DataFrame, start=None, save_path: Pa
     return fig, ax
 
 
-# --- Generate and save MAS DLI charts ---
-MAS_DLI_OUTFILE1 = G_CHART_DIR / "MAS_DLI_vs_Proxy.png"
-MAS_DLI_OUTFILE2 = G_CHART_DIR / "MAS_DLI_Stacked_3m.png"
-MAS_DLI_OUTFILE3 = G_CHART_DIR / "MAS_DLI_Monthly_BC.png"
+# --- Generate and save MAS DLI charts (combined into one figure with 3 subplots) ---
+MAS_DLI_OUTFILE = G_CHART_DIR / "MAS_DLI_Charts.png"
 
 # 1) Load DLI (monthly index, already 3m change series) from CSV
 mas_dli_3m = mas_dli_load_dli_csv(MAS_DLI_CSV_PATH)
@@ -3772,29 +3774,34 @@ mas_dli_df_all = mas_dli_proxy_3m.join(mas_dli_3m.rename("MAS_DLI_3m"), how="lef
 # drop early rows where 3m proxy can't be computed yet
 mas_dli_df_all = mas_dli_df_all.dropna(subset=["Proxy_SORA_3m", "NEER_contrib_3m", "SORA_contrib_3m"], how="any")
 
-# ---- Chart 1: MAS DLI vs Proxy ----
-fig1, ax1 = plt.subplots(figsize=(12, 5))
-ax1.plot(mas_dli_df_all.index, mas_dli_df_all["Proxy_SORA_3m"], color=MAS_DLI_C_PROXY, linewidth=MAS_DLI_LINE_W,
-        label="Proxy (60% S$NEER & 40% SORA, variance scaled)")
-ax1.plot(mas_dli_df_all.index, mas_dli_df_all["MAS_DLI_3m"], color=MAS_DLI_C_DLI, linewidth=MAS_DLI_LINE_W,
-        label="MAS DLI")
-ax1.set_title("MAS DLI and Proxy")
-ax1.grid(True, axis="y", alpha=0.3)
-ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=6))
-ax1.xaxis.set_major_formatter(mdates.DateFormatter("%b-%y"))
-plt.setp(ax1.get_xticklabels(), rotation=45, ha="right")
-ax1.set_ylim(top=1.5)
-ax1.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
-ax1.legend(loc="lower center", bbox_to_anchor=(0.5, -0.35), frameon=False, ncol=1)
-plt.tight_layout()
-plt.savefig(MAS_DLI_OUTFILE1, dpi=150, bbox_inches='tight')
-print(f"Saved chart to: {MAS_DLI_OUTFILE1}")
-
-# ---- Chart 2: Stacked 3m with lines (since 2019) ----
+# Prepare data for charts
 mas_dli_df_chart2 = mas_dli_df_all[mas_dli_df_all.index >= pd.Timestamp("2019-01-01")].copy()
-fig2, ax2 = plt.subplots(figsize=(12, 5))
+mas_dli_proxy_m = mas_dli_proxy_m.dropna(subset=["Proxy_m", "NEER_contrib_m", "SORA_contrib_m"])
+
+# Filter Monthly BC to last 2 years
+mas_dli_two_years_ago = pd.Timestamp.now() - pd.DateOffset(years=2)
+mas_dli_proxy_m_2y = mas_dli_proxy_m[mas_dli_proxy_m.index >= mas_dli_two_years_ago].copy()
+
+# Create figure with 3 subplots (vertically stacked)
+mas_dli_fig, (mas_dli_ax1, mas_dli_ax2, mas_dli_ax3) = plt.subplots(3, 1, figsize=(14, 15))
+
+# ---- Subplot 1: MAS DLI vs Proxy ----
+mas_dli_ax1.plot(mas_dli_df_all.index, mas_dli_df_all["Proxy_SORA_3m"], color=MAS_DLI_C_PROXY, linewidth=MAS_DLI_LINE_W,
+        label="Proxy (60% S$NEER & 40% SORA, variance scaled)")
+mas_dli_ax1.plot(mas_dli_df_all.index, mas_dli_df_all["MAS_DLI_3m"], color=MAS_DLI_C_DLI, linewidth=MAS_DLI_LINE_W,
+        label="MAS DLI")
+mas_dli_ax1.set_title("MAS DLI and Proxy", fontsize=12, fontweight='bold')
+mas_dli_ax1.grid(True, axis="y", alpha=0.3)
+mas_dli_ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=6))
+mas_dli_ax1.xaxis.set_major_formatter(mdates.DateFormatter("%b-%y"))
+plt.setp(mas_dli_ax1.get_xticklabels(), rotation=45, ha="right")
+mas_dli_ax1.set_ylim(top=1.5)
+mas_dli_ax1.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+mas_dli_ax1.legend(loc="upper right", fontsize=9)
+
+# ---- Subplot 2: Stacked 3m with lines (since 2019) ----
 mas_dli_stacked_two_series_excel_like(
-    ax=ax2,
+    ax=mas_dli_ax2,
     x=mas_dli_df_chart2.index,
     a=mas_dli_df_chart2["NEER_contrib_3m"],
     b=mas_dli_df_chart2["SORA_contrib_3m"],
@@ -3804,47 +3811,43 @@ mas_dli_stacked_two_series_excel_like(
     color_b=MAS_DLI_C_SORA_BAR,
     width_days=MAS_DLI_BAR_WIDTH_DAYS,
 )
-ax2.plot(mas_dli_df_chart2.index, mas_dli_df_chart2["MAS_DLI_3m"], color=MAS_DLI_C_DLI, linewidth=MAS_DLI_LINE_W, label="MAS DLI")
-ax2.plot(mas_dli_df_chart2.index, mas_dli_df_chart2["Proxy_SORA_3m"], color=MAS_DLI_C_PROXY, linewidth=MAS_DLI_LINE_W,
+mas_dli_ax2.plot(mas_dli_df_chart2.index, mas_dli_df_chart2["MAS_DLI_3m"], color=MAS_DLI_C_DLI, linewidth=MAS_DLI_LINE_W, label="MAS DLI")
+mas_dli_ax2.plot(mas_dli_df_chart2.index, mas_dli_df_chart2["Proxy_SORA_3m"], color=MAS_DLI_C_PROXY, linewidth=MAS_DLI_LINE_W,
         label="Proxy (60% S$NEER & 40% SORA, variance scaled)")
-ax2.axhline(0, color=MAS_DLI_C_ZERO, linewidth=1.2)
-ax2.set_title("MAS DLI and Proxy (change over three months)")
-ax2.grid(True, axis="y", alpha=0.3)
-ax2.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
-ax2.xaxis.set_major_formatter(mdates.DateFormatter("%b-%y"))
-plt.setp(ax2.get_xticklabels(), rotation=45, ha="right")
-ax2.set_ylim(-1.0, 1.5)
-ax2.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
-ax2.legend(loc="lower center", bbox_to_anchor=(0.5, -0.40), frameon=False, ncol=1)
-plt.tight_layout()
-plt.savefig(MAS_DLI_OUTFILE2, dpi=150, bbox_inches='tight')
-print(f"Saved chart to: {MAS_DLI_OUTFILE2}")
+mas_dli_ax2.axhline(0, color=MAS_DLI_C_ZERO, linewidth=1.2)
+mas_dli_ax2.set_title("MAS DLI and Proxy (change over three months, since 2019)", fontsize=12, fontweight='bold')
+mas_dli_ax2.grid(True, axis="y", alpha=0.3)
+mas_dli_ax2.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+mas_dli_ax2.xaxis.set_major_formatter(mdates.DateFormatter("%b-%y"))
+plt.setp(mas_dli_ax2.get_xticklabels(), rotation=45, ha="right")
+mas_dli_ax2.set_ylim(-1.0, 1.5)
+mas_dli_ax2.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+mas_dli_ax2.legend(loc="upper right", fontsize=9)
 
-# ---- Chart 3: Monthly BC ----
-mas_dli_proxy_m = mas_dli_proxy_m.dropna(subset=["Proxy_m", "NEER_contrib_m", "SORA_contrib_m"])
-fig3, ax3 = plt.subplots(figsize=(12, 5))
+# ---- Subplot 3: Monthly BC (last 2 years only) ----
 mas_dli_stacked_two_series_excel_like(
-    ax=ax3,
-    x=mas_dli_proxy_m.index,
-    a=mas_dli_proxy_m["NEER_contrib_m"],
-    b=mas_dli_proxy_m["SORA_contrib_m"],
+    ax=mas_dli_ax3,
+    x=mas_dli_proxy_m_2y.index,
+    a=mas_dli_proxy_m_2y["NEER_contrib_m"],
+    b=mas_dli_proxy_m_2y["SORA_contrib_m"],
     label_a="S$NEER contribution (monthly, variance scaled)",
     label_b="SORA contribution (monthly)",
     color_a=MAS_DLI_C_NEER_BAR,
     color_b=MAS_DLI_C_SORA_BAR,
     width_days=MAS_DLI_BAR_WIDTH_DAYS,
 )
-ax3.plot(mas_dli_proxy_m.index, mas_dli_proxy_m["Proxy_m"], color=MAS_DLI_C_PROXY, linewidth=MAS_DLI_LINE_W, label="Proxy (monthly change)")
-ax3.axhline(0, color=MAS_DLI_C_ZERO, linewidth=1.2)
-ax3.set_title("DLI Proxy (monthly change, BC calculated)")
-ax3.grid(True, axis="y", alpha=0.3)
-ax3.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
-ax3.xaxis.set_major_formatter(mdates.DateFormatter("%b-%y"))
-plt.setp(ax3.get_xticklabels(), rotation=45, ha="right")
-ax3.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
-ax3.legend(loc="lower center", bbox_to_anchor=(0.5, -0.40), frameon=False, ncol=1)
+mas_dli_ax3.plot(mas_dli_proxy_m_2y.index, mas_dli_proxy_m_2y["Proxy_m"], color=MAS_DLI_C_PROXY, linewidth=MAS_DLI_LINE_W, label="Proxy (monthly change)")
+mas_dli_ax3.axhline(0, color=MAS_DLI_C_ZERO, linewidth=1.2)
+mas_dli_ax3.set_title("DLI Proxy (monthly change, BC calculated, last 2 years)", fontsize=12, fontweight='bold')
+mas_dli_ax3.grid(True, axis="y", alpha=0.3)
+mas_dli_ax3.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+mas_dli_ax3.xaxis.set_major_formatter(mdates.DateFormatter("%b-%y"))
+plt.setp(mas_dli_ax3.get_xticklabels(), rotation=45, ha="right")
+mas_dli_ax3.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+mas_dli_ax3.legend(loc="upper right", fontsize=9)
+
 plt.tight_layout()
-plt.savefig(MAS_DLI_OUTFILE3, dpi=150, bbox_inches='tight')
-print(f"Saved chart to: {MAS_DLI_OUTFILE3}")
+plt.savefig(MAS_DLI_OUTFILE, dpi=150, bbox_inches='tight')
+print(f"Saved MAS DLI chart to: {MAS_DLI_OUTFILE}")
 
 print("MAS DLI charts generated successfully.")
