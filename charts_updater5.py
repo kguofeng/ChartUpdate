@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from pandas.tseries.offsets import BDay
@@ -3917,17 +3918,18 @@ print("\n" + "="*60)
 print("Generating Korea MMF Total AUM chart...")
 print("="*60)
 
-# MMF Configuration
-MMF_CACHE_FILE = os.path.join(os.path.dirname(__file__), "mmf_aum_cache.csv")
-MMF_OUTFILE = os.path.join(G_CHART_DIR, "korea_mmf_aum.png")
+# Import MMF crawler functions
+try:
+    from crawl_mmf_aum import load_cache as mmf_load_cache, save_cache as mmf_save_cache, crawl_mmf_trend, plot_mmf_chart
+    MMF_CRAWLER_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Could not import crawl_mmf_aum module: {e}")
+    MMF_CRAWLER_AVAILABLE = False
 
-def load_mmf_cache():
-    """Load MMF data from cache file."""
-    if os.path.exists(MMF_CACHE_FILE):
-        df = pd.read_csv(MMF_CACHE_FILE, parse_dates=["date"])
-        df["date"] = pd.to_datetime(df["date"]).dt.normalize()
-        return df
-    return pd.DataFrame(columns=["date", "mmf_total_aum"])
+# MMF Configuration
+MMF_SCRIPT_DIR = Path(os.path.dirname(__file__))
+MMF_CACHE_FILE = MMF_SCRIPT_DIR / "mmf_aum_cache.csv"
+MMF_OUTFILE = Path(G_CHART_DIR) / "korea_mmf_aum.png"
 
 def plot_mmf_chart_for_updater(df, output_path):
     """Plot MMF Total AUM over time with last data annotation and latest value label."""
@@ -4001,15 +4003,68 @@ def plot_mmf_chart_for_updater(df, output_path):
                 bbox=dict(facecolor='white', edgecolor="#1f77b4", alpha=0.8, boxstyle='round,pad=0.2'))
 
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.savefig(str(output_path), dpi=150, bbox_inches="tight")
     print(f"Saved MMF chart to: {output_path}")
     plt.close()
 
-# Load and plot MMF data
-mmf_df = load_mmf_cache()
-if len(mmf_df) > 0:
-    print(f"Loaded {len(mmf_df)} MMF records from cache")
-    plot_mmf_chart_for_updater(mmf_df, MMF_OUTFILE)
-    print("Korea MMF chart generated successfully.")
+# Run MMF crawler and generate chart
+if MMF_CRAWLER_AVAILABLE:
+    try:
+        # Load existing cache
+        mmf_cache_df = mmf_load_cache()
+        print(f"Existing MMF cache: {len(mmf_cache_df)} records")
+
+        # Determine if we need to fetch new data
+        mmf_needs_update = True
+        if len(mmf_cache_df) > 0:
+            mmf_cache_max_date = mmf_cache_df["date"].max()
+            mmf_today = pd.Timestamp.today().normalize()
+            # Only update if cache is more than 1 day old
+            if (mmf_today - mmf_cache_max_date).days <= 1:
+                print(f"MMF cache is up to date (last data: {mmf_cache_max_date.strftime('%Y-%m-%d')})")
+                mmf_needs_update = False
+
+        if mmf_needs_update:
+            print("Fetching new MMF data from KOFIA...")
+            # Calculate start date for incremental update
+            if len(mmf_cache_df) > 0:
+                mmf_start_date = (mmf_cache_df["date"].max() + timedelta(days=1)).strftime("%Y-%m-%d")
+            else:
+                mmf_start_date = "2017-01-01"
+            mmf_end_date = datetime.today().strftime("%Y-%m-%d")
+
+            # Run crawler
+            mmf_new_df = crawl_mmf_trend(
+                start_date=mmf_start_date,
+                end_date=mmf_end_date,
+                headless=True
+            )
+
+            # Merge with existing cache
+            if mmf_new_df is not None and len(mmf_new_df) > 0:
+                if len(mmf_cache_df) > 0:
+                    mmf_combined = pd.concat([mmf_cache_df, mmf_new_df], ignore_index=True)
+                else:
+                    mmf_combined = mmf_new_df
+                mmf_save_cache(mmf_combined)
+                mmf_df = mmf_combined
+                print(f"Updated MMF cache: {len(mmf_df)} total records")
+            else:
+                mmf_df = mmf_cache_df
+                print("No new MMF data fetched, using existing cache")
+        else:
+            mmf_df = mmf_cache_df
+
+        # Generate chart
+        if len(mmf_df) > 0:
+            plot_mmf_chart_for_updater(mmf_df, MMF_OUTFILE)
+            print("Korea MMF chart generated successfully.")
+        else:
+            print("No MMF data available to plot")
+
+    except Exception as e:
+        print(f"Error processing MMF data: {e}")
+        import traceback
+        traceback.print_exc()
 else:
-    print("No MMF data in cache. Run crawl_mmf_aum.py to fetch data first.")
+    print("MMF crawler not available. Skipping MMF chart generation.")
