@@ -1342,6 +1342,28 @@ def rolling_beta(y_on_x_df, xcol, ycol, window, standardize=False):
         out_idx.append(w.index[-1])
     return pd.Series(out_vals, index=pd.DatetimeIndex(out_idx), name=f'beta_{ycol}_on_{xcol}')
 
+def rolling_corr_time_capped(x, y, window, max_td):
+    """Rolling correlation with a cap on the wall-clock span of the window.
+
+    For each point, looks back `window` periods.  If the time from the first
+    to the last bar in that window exceeds `max_td`, bars are trimmed from the
+    start until the span fits.  Requires at least ``window // 2`` bars after
+    trimming; otherwise the correlation is set to NaN.
+    """
+    pair = pd.concat([x, y], axis=1).dropna()
+    out_vals, out_idx = [], []
+    min_periods = window // 2
+    for i in range(window, len(pair) + 1):
+        w = pair.iloc[i - window:i]
+        span = w.index[-1] - w.index[0]
+        if span > max_td:
+            cutoff = w.index[-1] - max_td
+            w = w[w.index >= cutoff]
+        corr = w.iloc[:, 0].corr(w.iloc[:, 1]) if len(w) >= min_periods else np.nan
+        out_vals.append(corr)
+        out_idx.append(pair.index[i - 1])
+    return pd.Series(out_vals, index=pd.DatetimeIndex(out_idx), name='rolling_corr')
+
 def _last_plotted_timestamp(*series):
     # Get the max timestamp among non-empty series; ensure tz-aware UTC
     valid = [s.index.max() for s in series if len(s)]
@@ -1577,6 +1599,83 @@ plt.savefig(Path(G_CHART_DIR, "USDCNH_vs_AUDUSD_High_Frequency_Correlation.png")
 del (cnh_tkr, aud_tkr, cnh_min, aud_min, dxy_min,
      px_min_2, px_min_3, px_block, ret_blk,
      roll_corr, roll_pcorr_usd, roll_beta, last_ts, last_sgt, last_info)
+
+
+# ## Intraday Rolling 2H Correlation: XAUUSD vs ESA / KMA / AUDUSD (3-min bars)
+lookback_days   = 120
+ref_ticker      = 'ES1 Index'
+gold_tkr        = 'XAUUSD Curncy'
+es_tkr          = 'ESA Index'
+km_tkr          = 'KMA Index'
+aud_tkr         = 'AUDUSD Curncy'
+block_minutes   = 3                        # 3-minute bars
+ROLL_WIN        = 40                       # 40 × 3min = 2 hours
+MAX_SPAN        = pd.Timedelta(minutes=135)  # 2h 15min cap
+
+# --- Pull intraday minute data ---
+gold_min = pull_intraday_minutes_last_n_days(gold_tkr, lookback_days, ref=ref_ticker)
+es_min   = pull_intraday_minutes_last_n_days(es_tkr,   lookback_days, ref=ref_ticker)
+km_min   = pull_intraday_minutes_last_n_days(km_tkr,   lookback_days, ref=ref_ticker)
+aud_min  = pull_intraday_minutes_last_n_days(aud_tkr,  lookback_days, ref=ref_ticker)
+
+# --- Align all four on a common minute grid with short ffill ---
+def _to_minute_last(s):
+    s = s.copy()
+    s.index = s.index.floor('T')
+    return s[~s.index.duplicated(keep='last')]
+
+_series = [gold_min, es_min, km_min, aud_min]
+_cleaned = [_to_minute_last(s) for s in _series]
+_idx = _cleaned[0].index
+for _s in _cleaned[1:]:
+    _idx = _idx.union(_s.index)
+_idx = _idx.sort_values()
+px_min = pd.concat([s.reindex(_idx) for s in _cleaned], axis=1)
+px_min = px_min.ffill(limit=3).dropna()
+px_min.columns = [gold_tkr, es_tkr, km_tkr, aud_tkr]
+
+# --- Sample every 3 minutes, compute log-returns ---
+px_block = last_every_n_minutes(px_min, block_minutes)
+ret_blk  = np.log(px_block).diff().dropna()
+
+ren = {gold_tkr: 'XAUUSD', es_tkr: 'ESA', km_tkr: 'KMA', aud_tkr: 'AUDUSD'}
+ret_blk = ret_blk.rename(columns=ren)
+
+# --- Rolling correlations (time-capped at 2h15m) ---
+roll_corr_es  = rolling_corr_time_capped(ret_blk['XAUUSD'], ret_blk['ESA'],    ROLL_WIN, MAX_SPAN)
+roll_corr_km  = rolling_corr_time_capped(ret_blk['XAUUSD'], ret_blk['KMA'],    ROLL_WIN, MAX_SPAN)
+roll_corr_aud = rolling_corr_time_capped(ret_blk['XAUUSD'], ret_blk['AUDUSD'], ROLL_WIN, MAX_SPAN)
+
+# --- Last updated (SGT) ---
+last_ts  = _last_plotted_timestamp(roll_corr_es, roll_corr_km, roll_corr_aud)
+last_sgt = (last_ts.tz_convert('Asia/Singapore').strftime('%Y-%m-%d %H:%M %Z')
+            if last_ts is not None else 'n/a')
+last_updated_text = f"Last Updated: {last_sgt} SGT"
+
+# --- Plot all three correlations in one subplot ---
+fig, ax = plt.subplots(figsize=(12, 6))
+ax.plot(roll_corr_es.index,  roll_corr_es.values,  label='XAUUSD vs ESA',    color='tab:blue')
+ax.plot(roll_corr_km.index,  roll_corr_km.values,  label='XAUUSD vs KMA',    color='tab:orange')
+ax.plot(roll_corr_aud.index, roll_corr_aud.values,  label='XAUUSD vs AUDUSD', color='tab:green')
+ax.axhline(0, color='gray', lw=1, linestyle='--')
+ax.set_title('Intraday Rolling 2H Correlation (3-min bars): XAUUSD vs ESA / KMA / AUDUSD')
+ax.set_ylabel('Correlation')
+ax.legend(loc='upper right')
+ax.grid(True, alpha=0.3)
+ax.xaxis.set_major_locator(WeekdayLocator(byweekday=MO, interval=1))
+ax.xaxis.set_major_formatter(DateFormatter('%b %d'))
+fig.text(
+    0.99, 0.98, last_updated_text,
+    ha='right', va='top',
+    bbox=dict(boxstyle='round', facecolor='white', edgecolor='0.5', alpha=0.85),
+    fontsize=9)
+plt.tight_layout()
+plt.savefig(Path(G_CHART_DIR, "XAUUSD_vs_ES_KM_AUD_Intraday_Correlation.png"), bbox_inches='tight')
+
+# Cleanup
+del (gold_tkr, es_tkr, km_tkr, aud_tkr, gold_min, es_min, km_min, aud_min,
+     px_min, px_block, ret_blk, roll_corr_es, roll_corr_km, roll_corr_aud)
+
 
 # # ## Rolling 10d 4hourly correlation (USDCNH vs CGB Futs)
 # lookback_days = 120        
