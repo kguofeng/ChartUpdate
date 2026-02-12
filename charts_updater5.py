@@ -4240,8 +4240,22 @@ try:
         employees_raw.columns = [col[0] for col in employees_raw.columns]
     employees_raw.index = pd.to_datetime(employees_raw.index)
 
-    # Calculate total employees - only for dates where ALL companies have data
-    employees_complete = employees_raw.dropna(how='any')  # Only keep rows with all companies
+    # Find company with most missing data in past 5 years and drop it
+    five_years_ago = pd.Timestamp.today().normalize() - pd.DateOffset(years=5)
+    employees_5y = employees_raw[employees_raw.index >= five_years_ago]
+    if not employees_5y.empty and len(employees_5y.columns) > 1:
+        missing_counts = employees_5y.isna().sum()
+        worst_company = missing_counts.idxmax()
+        worst_missing = missing_counts.max()
+        print(f"  Company with most missing employee data (past 5y): {worst_company} ({worst_missing} missing)")
+        # Drop the worst company
+        employees_filtered = employees_raw.drop(columns=[worst_company])
+        print(f"  Dropping {worst_company} from employee analysis. Using remaining {len(employees_filtered.columns)} companies.")
+    else:
+        employees_filtered = employees_raw
+
+    # Calculate total employees - only for dates where ALL remaining companies have data
+    employees_complete = employees_filtered.dropna(how='any')
     employees_total = employees_complete.sum(axis=1)
     employees_total.name = 'Total Employees'
     # Forward fill to get continuous series for rolling calculation
