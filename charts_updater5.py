@@ -4240,14 +4240,18 @@ try:
         employees_raw.columns = [col[0] for col in employees_raw.columns]
     employees_raw.index = pd.to_datetime(employees_raw.index)
 
-    # Calculate total employees and 12m rolling change
-    employees_total = employees_raw.sum(axis=1).dropna()
+    # Calculate total employees - only for dates where ALL companies have data
+    employees_complete = employees_raw.dropna(how='any')  # Only keep rows with all companies
+    employees_total = employees_complete.sum(axis=1)
     employees_total.name = 'Total Employees'
     # Forward fill to get continuous series for rolling calculation
-    employees_total_filled = employees_total.asfreq('D').ffill()
-    employees_12m_change = employees_total_filled.diff(periods=365)  # Approximate 12 months
-    employees_12m_change = employees_12m_change.dropna()
-    employees_12m_change.name = '12M Change'
+    if not employees_total.empty:
+        employees_total_filled = employees_total.asfreq('D').ffill()
+        employees_12m_change = employees_total_filled.diff(periods=365)  # Approximate 12 months
+        employees_12m_change = employees_12m_change.dropna()
+        employees_12m_change.name = '12M Change'
+    else:
+        employees_12m_change = pd.Series()
 
     # --- Fetch Margin Data (RR057 Gross Margin, RR243 Profit Margin) ---
     print("Fetching margin data (RR057, RR243)...")
@@ -4280,31 +4284,22 @@ try:
     fig, axes = plt.subplots(4, 1, figsize=(14, 20))
     ax1, ax2, ax3, ax4 = axes
 
-    # === Subplot 1: Revenue Growth vs India Services Exports ===
-    ax1_twin = ax1.twinx()
-
+    # === Subplot 1: Revenue Growth vs India Services Exports (same scale) ===
     if not revenue_growth_avg.empty:
         ax1.plot(revenue_growth_avg.index, revenue_growth_avg.values, color='tab:blue', linewidth=2,
                  label='IT Companies Avg Revenue Growth YoY%', marker='o', markersize=3)
     if not services_export_yoy.empty:
-        ax1_twin.plot(services_export_yoy.index, services_export_yoy.values, color='tab:orange', linewidth=2,
-                      label='India Services Exports YoY%', linestyle='--')
+        ax1.plot(services_export_yoy.index, services_export_yoy.values, color='tab:orange', linewidth=2,
+                 label='India Services Exports YoY%', linestyle='--')
 
-    ax1.set_title("IT Companies Revenue Growth vs India Services Exports Growth", fontsize=12, fontweight='bold')
-    ax1.set_ylabel("IT Revenue Growth YoY%", color='tab:blue')
-    ax1_twin.set_ylabel("Services Exports YoY%", color='tab:orange')
-    ax1.tick_params(axis='y', labelcolor='tab:blue')
-    ax1_twin.tick_params(axis='y', labelcolor='tab:orange')
+    ax1.set_title("IT Companies Revenue Growth vs India Services Exports Growth (YoY%)", fontsize=12, fontweight='bold')
+    ax1.set_ylabel("YoY Growth %")
     ax1.axhline(0, color='gray', linewidth=0.8, linestyle='--')
     ax1.grid(True, alpha=0.3)
     ax1.xaxis.set_major_locator(mdates.YearLocator())
     ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
     plt.setp(ax1.get_xticklabels(), rotation=45, ha='right')
-
-    # Combined legend
-    lines1, labels1 = ax1.get_legend_handles_labels()
-    lines2, labels2 = ax1_twin.get_legend_handles_labels()
-    ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left', fontsize=9)
+    ax1.legend(loc='upper left', fontsize=9)
 
     # Add latest values
     if not revenue_growth_avg.empty:
@@ -4313,6 +4308,12 @@ try:
         ax1.annotate(f"{last_rev_val:.1f}%", xy=(last_rev_date, last_rev_val),
                      xytext=(5, 0), textcoords='offset points', fontsize=9, color='tab:blue',
                      bbox=dict(facecolor='white', edgecolor='tab:blue', alpha=0.8, boxstyle='round,pad=0.2'))
+    if not services_export_yoy.empty:
+        last_exp_date = services_export_yoy.index[-1]
+        last_exp_val = services_export_yoy.iloc[-1]
+        ax1.annotate(f"{last_exp_val:.1f}%", xy=(last_exp_date, last_exp_val),
+                     xytext=(5, -15), textcoords='offset points', fontsize=9, color='tab:orange',
+                     bbox=dict(facecolor='white', edgecolor='tab:orange', alpha=0.8, boxstyle='round,pad=0.2'))
 
     # === Subplot 2: Share Price Index vs NIFTY ===
     if not it_index.empty:
@@ -4382,21 +4383,30 @@ try:
                      xytext=(5, 0), textcoords='offset points', fontsize=9, color='tab:blue',
                      bbox=dict(facecolor='white', edgecolor='tab:blue', alpha=0.8, boxstyle='round,pad=0.2'))
 
-    # === Subplot 4: Margins ===
+    # === Subplot 4: Margins (separate axes) ===
+    ax4_twin = ax4.twinx()
+
     if not gross_margin_avg.empty:
         ax4.plot(gross_margin_avg.index, gross_margin_avg.values, color='tab:blue', linewidth=2,
                  label='Avg Gross Margin %', marker='o', markersize=3)
     if not profit_margin_avg.empty:
-        ax4.plot(profit_margin_avg.index, profit_margin_avg.values, color='tab:green', linewidth=2,
-                 label='Avg Profit Margin %', marker='s', markersize=3)
+        ax4_twin.plot(profit_margin_avg.index, profit_margin_avg.values, color='tab:green', linewidth=2,
+                      label='Avg Profit Margin %', marker='s', markersize=3)
 
     ax4.set_title("Average Gross Margin & Profit Margin", fontsize=12, fontweight='bold')
-    ax4.set_ylabel("Margin %")
+    ax4.set_ylabel("Gross Margin %", color='tab:blue')
+    ax4_twin.set_ylabel("Profit Margin %", color='tab:green')
+    ax4.tick_params(axis='y', labelcolor='tab:blue')
+    ax4_twin.tick_params(axis='y', labelcolor='tab:green')
     ax4.grid(True, alpha=0.3)
     ax4.xaxis.set_major_locator(mdates.YearLocator())
     ax4.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
     plt.setp(ax4.get_xticklabels(), rotation=45, ha='right')
-    ax4.legend(loc='upper left', fontsize=9)
+
+    # Combined legend
+    lines1, labels1 = ax4.get_legend_handles_labels()
+    lines2, labels2 = ax4_twin.get_legend_handles_labels()
+    ax4.legend(lines1 + lines2, labels1 + labels2, loc='upper left', fontsize=9)
 
     # Add latest values
     if not gross_margin_avg.empty:
@@ -4408,9 +4418,9 @@ try:
     if not profit_margin_avg.empty:
         last_pm_date = profit_margin_avg.index[-1]
         last_pm_val = profit_margin_avg.iloc[-1]
-        ax4.annotate(f"{last_pm_val:.1f}%", xy=(last_pm_date, last_pm_val),
-                     xytext=(5, -10), textcoords='offset points', fontsize=9, color='tab:green',
-                     bbox=dict(facecolor='white', edgecolor='tab:green', alpha=0.8, boxstyle='round,pad=0.2'))
+        ax4_twin.annotate(f"{last_pm_val:.1f}%", xy=(last_pm_date, last_pm_val),
+                          xytext=(5, -10), textcoords='offset points', fontsize=9, color='tab:green',
+                          bbox=dict(facecolor='white', edgecolor='tab:green', alpha=0.8, boxstyle='round,pad=0.2'))
 
     # Add overall title and last data annotation
     fig.suptitle("India IT Services Companies Analysis\n(TCS, Wipro, HCL Tech, Infosys, Cognizant)",
