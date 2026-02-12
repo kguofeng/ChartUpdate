@@ -4124,3 +4124,317 @@ if MMF_CRAWLER_AVAILABLE:
         traceback.print_exc()
 else:
     print("MMF crawler not available. Skipping MMF chart generation.")
+
+# =============================================================================
+# INDIA IT SERVICES COMPANIES CHART
+# =============================================================================
+print("\n" + "="*60)
+print("Generating India IT Services Companies chart...")
+print("="*60)
+
+# Configuration
+INDIA_IT_TICKERS = ['TCS IN Equity', 'WPRO IN Equity', 'HCLT IN Equity', 'INFO IN Equity', 'CTSH US Equity']
+INDIA_IT_NAMES = {
+    'TCS IN Equity': 'TCS',
+    'WPRO IN Equity': 'Wipro',
+    'HCLT IN Equity': 'HCL Tech',
+    'INFO IN Equity': 'Infosys',
+    'CTSH US Equity': 'Cognizant'
+}
+INDIA_SERVICES_EXPORT_TICKER = 'INITSEXP Index'
+NIFTY_TICKER = 'NIFTY Index'
+INDIA_IT_START_DATE = datetime(2010, 1, 1)
+INDIA_IT_END_DATE = datetime.today()
+INDIA_IT_OUTFILE = Path(G_CHART_DIR) / "india_it_services.png"
+
+try:
+    # --- Fetch Revenue Growth Data (RR033) ---
+    print("Fetching revenue growth data (RR033)...")
+    revenue_growth_raw = blp.bdh(
+        tickers=INDIA_IT_TICKERS,
+        flds=['RR033'],
+        start_date=INDIA_IT_START_DATE,
+        end_date=INDIA_IT_END_DATE
+    )
+    # Flatten multi-index columns
+    if isinstance(revenue_growth_raw.columns, pd.MultiIndex):
+        revenue_growth_raw.columns = [col[0] for col in revenue_growth_raw.columns]
+    revenue_growth_raw.index = pd.to_datetime(revenue_growth_raw.index)
+
+    # Calculate average revenue growth across companies
+    revenue_growth_avg = revenue_growth_raw.mean(axis=1).dropna()
+    revenue_growth_avg.name = 'Avg Revenue Growth YoY'
+
+    # --- Fetch India Services Exports Data ---
+    print("Fetching India services exports data...")
+    services_export_raw = blp.bdh(
+        tickers=[INDIA_SERVICES_EXPORT_TICKER],
+        flds=['PX_LAST'],
+        start_date=INDIA_IT_START_DATE,
+        end_date=INDIA_IT_END_DATE
+    )
+    if isinstance(services_export_raw.columns, pd.MultiIndex):
+        services_export_raw.columns = [col[0] for col in services_export_raw.columns]
+    services_export_raw.index = pd.to_datetime(services_export_raw.index)
+    services_export = services_export_raw.iloc[:, 0].dropna()
+
+    # Calculate rolling 12-month sum and YoY growth
+    services_export_12m = services_export.rolling(window=12, min_periods=12).sum()
+    services_export_yoy = services_export_12m.pct_change(periods=12) * 100
+    services_export_yoy = services_export_yoy.dropna()
+    services_export_yoy.name = 'India Services Exports YoY%'
+
+    # --- Fetch Share Prices (PX_LAST) ---
+    print("Fetching share price data...")
+    prices_raw = blp.bdh(
+        tickers=INDIA_IT_TICKERS + [NIFTY_TICKER],
+        flds=['PX_LAST'],
+        start_date=INDIA_IT_START_DATE,
+        end_date=INDIA_IT_END_DATE
+    )
+    if isinstance(prices_raw.columns, pd.MultiIndex):
+        prices_raw.columns = [col[0] for col in prices_raw.columns]
+    prices_raw.index = pd.to_datetime(prices_raw.index)
+
+    # Find common start date where all companies have data
+    prices_companies = prices_raw[INDIA_IT_TICKERS].dropna()
+    if not prices_companies.empty:
+        common_start = prices_companies.index[0]
+        prices_companies = prices_companies[prices_companies.index >= common_start]
+
+        # Create index (base = 100 at common start)
+        prices_indexed = (prices_companies / prices_companies.iloc[0]) * 100
+
+        # Create equal-weighted index of IT companies
+        it_index = prices_indexed.mean(axis=1)
+        it_index.name = 'IT Services Index'
+
+        # Get NIFTY and rebase
+        nifty_prices = prices_raw[NIFTY_TICKER].dropna()
+        nifty_prices = nifty_prices[nifty_prices.index >= common_start]
+        if not nifty_prices.empty:
+            nifty_indexed = (nifty_prices / nifty_prices.iloc[0]) * 100
+            nifty_indexed.name = 'NIFTY Index'
+
+            # Calculate relative performance (IT Index / NIFTY)
+            common_idx = it_index.index.intersection(nifty_indexed.index)
+            relative_perf = (it_index.loc[common_idx] / nifty_indexed.loc[common_idx]) * 100
+            relative_perf.name = 'IT vs NIFTY (Relative)'
+        else:
+            nifty_indexed = pd.Series()
+            relative_perf = pd.Series()
+    else:
+        it_index = pd.Series()
+        nifty_indexed = pd.Series()
+        relative_perf = pd.Series()
+
+    # --- Fetch Employee Count Data (RR121) ---
+    print("Fetching employee count data (RR121)...")
+    employees_raw = blp.bdh(
+        tickers=INDIA_IT_TICKERS,
+        flds=['RR121'],
+        start_date=INDIA_IT_START_DATE,
+        end_date=INDIA_IT_END_DATE
+    )
+    if isinstance(employees_raw.columns, pd.MultiIndex):
+        employees_raw.columns = [col[0] for col in employees_raw.columns]
+    employees_raw.index = pd.to_datetime(employees_raw.index)
+
+    # Calculate total employees and 12m rolling change
+    employees_total = employees_raw.sum(axis=1).dropna()
+    employees_total.name = 'Total Employees'
+    # Forward fill to get continuous series for rolling calculation
+    employees_total_filled = employees_total.asfreq('D').ffill()
+    employees_12m_change = employees_total_filled.diff(periods=365)  # Approximate 12 months
+    employees_12m_change = employees_12m_change.dropna()
+    employees_12m_change.name = '12M Change'
+
+    # --- Fetch Margin Data (RR057 Gross Margin, RR243 Profit Margin) ---
+    print("Fetching margin data (RR057, RR243)...")
+    gross_margin_raw = blp.bdh(
+        tickers=INDIA_IT_TICKERS,
+        flds=['RR057'],
+        start_date=INDIA_IT_START_DATE,
+        end_date=INDIA_IT_END_DATE
+    )
+    if isinstance(gross_margin_raw.columns, pd.MultiIndex):
+        gross_margin_raw.columns = [col[0] for col in gross_margin_raw.columns]
+    gross_margin_raw.index = pd.to_datetime(gross_margin_raw.index)
+    gross_margin_avg = gross_margin_raw.mean(axis=1).dropna()
+    gross_margin_avg.name = 'Avg Gross Margin'
+
+    profit_margin_raw = blp.bdh(
+        tickers=INDIA_IT_TICKERS,
+        flds=['RR243'],
+        start_date=INDIA_IT_START_DATE,
+        end_date=INDIA_IT_END_DATE
+    )
+    if isinstance(profit_margin_raw.columns, pd.MultiIndex):
+        profit_margin_raw.columns = [col[0] for col in profit_margin_raw.columns]
+    profit_margin_raw.index = pd.to_datetime(profit_margin_raw.index)
+    profit_margin_avg = profit_margin_raw.mean(axis=1).dropna()
+    profit_margin_avg.name = 'Avg Profit Margin'
+
+    # --- Create the Chart ---
+    print("Creating India IT Services chart...")
+    fig, axes = plt.subplots(4, 1, figsize=(14, 20))
+    ax1, ax2, ax3, ax4 = axes
+
+    # === Subplot 1: Revenue Growth vs India Services Exports ===
+    ax1_twin = ax1.twinx()
+
+    if not revenue_growth_avg.empty:
+        ax1.plot(revenue_growth_avg.index, revenue_growth_avg.values, color='tab:blue', linewidth=2,
+                 label='IT Companies Avg Revenue Growth YoY%', marker='o', markersize=3)
+    if not services_export_yoy.empty:
+        ax1_twin.plot(services_export_yoy.index, services_export_yoy.values, color='tab:orange', linewidth=2,
+                      label='India Services Exports YoY%', linestyle='--')
+
+    ax1.set_title("IT Companies Revenue Growth vs India Services Exports Growth", fontsize=12, fontweight='bold')
+    ax1.set_ylabel("IT Revenue Growth YoY%", color='tab:blue')
+    ax1_twin.set_ylabel("Services Exports YoY%", color='tab:orange')
+    ax1.tick_params(axis='y', labelcolor='tab:blue')
+    ax1_twin.tick_params(axis='y', labelcolor='tab:orange')
+    ax1.axhline(0, color='gray', linewidth=0.8, linestyle='--')
+    ax1.grid(True, alpha=0.3)
+    ax1.xaxis.set_major_locator(mdates.YearLocator())
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    plt.setp(ax1.get_xticklabels(), rotation=45, ha='right')
+
+    # Combined legend
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax1_twin.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left', fontsize=9)
+
+    # Add latest values
+    if not revenue_growth_avg.empty:
+        last_rev_date = revenue_growth_avg.index[-1]
+        last_rev_val = revenue_growth_avg.iloc[-1]
+        ax1.annotate(f"{last_rev_val:.1f}%", xy=(last_rev_date, last_rev_val),
+                     xytext=(5, 0), textcoords='offset points', fontsize=9, color='tab:blue',
+                     bbox=dict(facecolor='white', edgecolor='tab:blue', alpha=0.8, boxstyle='round,pad=0.2'))
+
+    # === Subplot 2: Share Price Index vs NIFTY ===
+    if not it_index.empty:
+        ax2.plot(it_index.index, it_index.values, color='tab:blue', linewidth=2, label='IT Services Index')
+    if not nifty_indexed.empty:
+        ax2.plot(nifty_indexed.index, nifty_indexed.values, color='tab:green', linewidth=2, label='NIFTY Index')
+
+    ax2_twin = ax2.twinx()
+    if not relative_perf.empty:
+        ax2_twin.plot(relative_perf.index, relative_perf.values, color='tab:red', linewidth=1.5,
+                      label='IT vs NIFTY (Relative)', linestyle='--', alpha=0.7)
+        ax2_twin.axhline(100, color='tab:red', linewidth=0.8, linestyle=':', alpha=0.5)
+
+    ax2.set_title("IT Services Share Price Index vs NIFTY (Base=100 at common start)", fontsize=12, fontweight='bold')
+    ax2.set_ylabel("Index Level", color='black')
+    ax2_twin.set_ylabel("Relative Performance", color='tab:red')
+    ax2_twin.tick_params(axis='y', labelcolor='tab:red')
+    ax2.grid(True, alpha=0.3)
+    ax2.xaxis.set_major_locator(mdates.YearLocator())
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    plt.setp(ax2.get_xticklabels(), rotation=45, ha='right')
+
+    # Combined legend
+    lines1, labels1 = ax2.get_legend_handles_labels()
+    lines2, labels2 = ax2_twin.get_legend_handles_labels()
+    ax2.legend(lines1 + lines2, labels1 + labels2, loc='upper left', fontsize=9)
+
+    # Add latest values
+    if not it_index.empty:
+        last_it_date = it_index.index[-1]
+        last_it_val = it_index.iloc[-1]
+        ax2.annotate(f"{last_it_val:.0f}", xy=(last_it_date, last_it_val),
+                     xytext=(5, 5), textcoords='offset points', fontsize=9, color='tab:blue',
+                     bbox=dict(facecolor='white', edgecolor='tab:blue', alpha=0.8, boxstyle='round,pad=0.2'))
+
+    # === Subplot 3: Employee Count ===
+    if not employees_total.empty:
+        ax3.plot(employees_total.index, employees_total.values / 1000, color='tab:blue', linewidth=2,
+                 label='Total Employees (thousands)', marker='o', markersize=3)
+
+    ax3_twin = ax3.twinx()
+    if not employees_12m_change.empty:
+        # Resample to show cleaner 12m change data
+        employees_12m_sampled = employees_12m_change.resample('Q').last().dropna()
+        colors_emp = ['tab:green' if x >= 0 else 'tab:red' for x in employees_12m_sampled.values]
+        ax3_twin.bar(employees_12m_sampled.index, employees_12m_sampled.values / 1000,
+                     width=60, color=colors_emp, alpha=0.5, label='12M Change (thousands)')
+
+    ax3.set_title("Total Employees (5 IT Companies)", fontsize=12, fontweight='bold')
+    ax3.set_ylabel("Total Employees (thousands)", color='tab:blue')
+    ax3_twin.set_ylabel("12M Change (thousands)", color='gray')
+    ax3.tick_params(axis='y', labelcolor='tab:blue')
+    ax3.grid(True, alpha=0.3)
+    ax3.xaxis.set_major_locator(mdates.YearLocator())
+    ax3.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    plt.setp(ax3.get_xticklabels(), rotation=45, ha='right')
+
+    lines1, labels1 = ax3.get_legend_handles_labels()
+    lines2, labels2 = ax3_twin.get_legend_handles_labels()
+    ax3.legend(lines1 + lines2, labels1 + labels2, loc='upper left', fontsize=9)
+
+    # Add latest value
+    if not employees_total.empty:
+        last_emp_date = employees_total.index[-1]
+        last_emp_val = employees_total.iloc[-1]
+        ax3.annotate(f"{last_emp_val/1000:.0f}k", xy=(last_emp_date, last_emp_val/1000),
+                     xytext=(5, 0), textcoords='offset points', fontsize=9, color='tab:blue',
+                     bbox=dict(facecolor='white', edgecolor='tab:blue', alpha=0.8, boxstyle='round,pad=0.2'))
+
+    # === Subplot 4: Margins ===
+    if not gross_margin_avg.empty:
+        ax4.plot(gross_margin_avg.index, gross_margin_avg.values, color='tab:blue', linewidth=2,
+                 label='Avg Gross Margin %', marker='o', markersize=3)
+    if not profit_margin_avg.empty:
+        ax4.plot(profit_margin_avg.index, profit_margin_avg.values, color='tab:green', linewidth=2,
+                 label='Avg Profit Margin %', marker='s', markersize=3)
+
+    ax4.set_title("Average Gross Margin & Profit Margin", fontsize=12, fontweight='bold')
+    ax4.set_ylabel("Margin %")
+    ax4.grid(True, alpha=0.3)
+    ax4.xaxis.set_major_locator(mdates.YearLocator())
+    ax4.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    plt.setp(ax4.get_xticklabels(), rotation=45, ha='right')
+    ax4.legend(loc='upper left', fontsize=9)
+
+    # Add latest values
+    if not gross_margin_avg.empty:
+        last_gm_date = gross_margin_avg.index[-1]
+        last_gm_val = gross_margin_avg.iloc[-1]
+        ax4.annotate(f"{last_gm_val:.1f}%", xy=(last_gm_date, last_gm_val),
+                     xytext=(5, 5), textcoords='offset points', fontsize=9, color='tab:blue',
+                     bbox=dict(facecolor='white', edgecolor='tab:blue', alpha=0.8, boxstyle='round,pad=0.2'))
+    if not profit_margin_avg.empty:
+        last_pm_date = profit_margin_avg.index[-1]
+        last_pm_val = profit_margin_avg.iloc[-1]
+        ax4.annotate(f"{last_pm_val:.1f}%", xy=(last_pm_date, last_pm_val),
+                     xytext=(5, -10), textcoords='offset points', fontsize=9, color='tab:green',
+                     bbox=dict(facecolor='white', edgecolor='tab:green', alpha=0.8, boxstyle='round,pad=0.2'))
+
+    # Add overall title and last data annotation
+    fig.suptitle("India IT Services Companies Analysis\n(TCS, Wipro, HCL Tech, Infosys, Cognizant)",
+                 fontsize=14, fontweight='bold', y=0.995)
+
+    # Find latest data date across all series
+    all_dates = []
+    for s in [revenue_growth_avg, services_export_yoy, it_index, employees_total, gross_margin_avg, profit_margin_avg]:
+        if not s.empty:
+            all_dates.append(s.index[-1])
+    if all_dates:
+        last_data_date = max(all_dates)
+        fig.text(0.98, 0.99, f"Last data: {last_data_date.strftime('%d %b %Y')}", transform=fig.transFigure,
+                 fontsize=10, ha='right', va='top',
+                 bbox=dict(facecolor='white', edgecolor='gray', alpha=0.9, boxstyle='round,pad=0.3'))
+
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    plt.savefig(INDIA_IT_OUTFILE, dpi=150, bbox_inches='tight')
+    print(f"Saved India IT Services chart to: {INDIA_IT_OUTFILE}")
+    plt.close()
+
+    print("India IT Services chart generated successfully.")
+
+except Exception as e:
+    print(f"Error generating India IT Services chart: {e}")
+    import traceback
+    traceback.print_exc()
