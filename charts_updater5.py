@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from pandas.tseries.offsets import BDay
@@ -16,8 +17,17 @@ import requests
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib.colors import TwoSlopeNorm
+from matplotlib.ticker import FormatStrFormatter
 from xbbg import blp
-import statsmodels.api as sm
+# Lazy import for statsmodels due to scipy compatibility issues in Python 3.13
+try:
+    import statsmodels.api as sm
+    STATSMODELS_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: statsmodels import failed ({e}). Some charts may not be generated.")
+    print("To fix: pip install --upgrade statsmodels scipy")
+    sm = None
+    STATSMODELS_AVAILABLE = False
 from pandas.tseries.offsets import CustomBusinessDay
 from download_bi_monetary_data import get_adjusted_m0_data, compute_yoy_growth
 
@@ -540,15 +550,15 @@ del (retail_raw, wholesale_raw, soft_now_raw, soft_exp_raw,
 FIELD       = 'PX_LAST'
 START_DATE  = datetime(2020, 1, 1)
 END_DATE    = datetime.today()
-ROLL_WIN    = 63  
+ROLL_WIN    = 63
 SAVE_PATH   = Path(G_CHART_DIR) if 'G_CHART_DIR' in globals() else Path.cwd()
 OUTFILE     = SAVE_PATH / "DXY_Rolling_Attribution.png"
 TICKERS = {
     'DXY':     'DXY Index',
     'SPX':     'SPX Index',
     'VIX':     'VIX Index',
-    'US10Y':   'USOSFR10 Index',        
-    'US1Y1Y':  'S0042FS 1Y1Y BLC Curncy',  
+    'US10Y':   'USOSFR10 Index',
+    'US1Y1Y':  'S0042FS 1Y1Y BLC Curncy',
 }
 
 def bdh_flat(tickers, field=FIELD, start=START_DATE, end=END_DATE):
@@ -586,6 +596,11 @@ def rolling_two_stage(df, y_col, x_stage1, x_stage2_list, win):
       2) residuals(y|x_stage1) ~ x_stage2 -> R2_stage2 (one series per x_stage2)
     Returns: DataFrame with columns ['R2_stage1', f'R2_{x_stage2}', ...]
     """
+    # Check if statsmodels is available
+    if not STATSMODELS_AVAILABLE or sm is None:
+        print("Warning: statsmodels not available, skipping rolling_two_stage regression")
+        return pd.DataFrame(columns=['R2_stage1'] + [f'R2_{x}' for x in x_stage2_list])
+
     idx = []
     series = {'R2_stage1': []}
     for x2 in x_stage2_list:
@@ -593,7 +608,7 @@ def rolling_two_stage(df, y_col, x_stage1, x_stage2_list, win):
     n = len(df)
     for i in range(win, n + 1):
         sub = df.iloc[i - win:i][[y_col, x_stage1] + x_stage2_list].dropna()
-        if len(sub) < 20:  
+        if len(sub) < 20:
             continue
         y  = sub[y_col].values
         X1 = sm.add_constant(sub[[x_stage1]].values, has_constant='add')
@@ -2960,8 +2975,9 @@ TICKERS = {
     'IDM2YOY Index':  'M2 YoY',
 }
 
-START_DATE = datetime(2015, 1, 1)
+START_DATE = datetime(2019, 1, 1)  # Need data from 2019 to compute YoY for 2020
 END_DATE   = datetime.today()
+PLOT_START = datetime(2020, 1, 1)  # Only plot from 2020 onwards
 
 SAVE_PATH = Path(G_CHART_DIR) if 'G_CHART_DIR' in globals() else Path.cwd()
 OUTFILE   = SAVE_PATH / "Indonesia_MoneySupply_YoY.png"
@@ -3017,6 +3033,9 @@ plot_df = pd.DataFrame(index=full_idx)
 plot_df['M1 YoY']         = df['M1 YoY'].reindex(full_idx)
 plot_df['M2 YoY']         = df['M2 YoY'].reindex(full_idx)
 plot_df['Base Money YoY'] = base_yoy.reindex(full_idx)
+
+# Filter to only show data from 2020 onwards
+plot_df = plot_df[plot_df.index >= PLOT_START]
 
 # Last date with any data
 last_data_date = plot_df.dropna(how='all').index.max()
@@ -3495,3 +3514,951 @@ print(f"Saved chart to: {OUTFILE}")
 print(f"Days with |pip diff| > {PIP_X_TH:g}: {pip_x_mask.sum()}")
 print(f"Days with |% diff|  > {PCT_X_TH:g}: {pct_x_mask.sum()}")
 print(f"Days FTSE outside spot Low/High: {len(oor_dates)}")
+
+###############################################################################
+# MAS DLI Chart
+###############################################################################
+# Tickers
+MAS_DLI_TICKER_NEER = "CTSGSGD Index"      # S$NEER (daily)
+MAS_DLI_TICKER_SORA = "SORACA3M Index"     # 3m compounded SORA (daily)
+
+MAS_DLI_CSV_PATH = Path(__file__).parent / "mas_dli_from_excel.csv"
+
+MAS_DLI_START_DATE = datetime(2011, 10, 1)  # at least 3 months before first plotted month
+MAS_DLI_END_DATE = datetime.today()
+
+# Weights + scaling (as per Excel logic)
+MAS_DLI_W_NEER = 0.6
+MAS_DLI_W_SORA = 0.4
+MAS_DLI_NEER_VAR_DIV = 2.0
+
+# Styling
+MAS_DLI_C_DLI = "#4472C4"
+MAS_DLI_C_PROXY = "#ED7D31"
+MAS_DLI_C_NEER_BAR = "#70AD47"
+MAS_DLI_C_SORA_BAR = "#FFC000"
+MAS_DLI_C_ZERO = "black"
+MAS_DLI_LINE_W = 2.5
+MAS_DLI_BAR_WIDTH_DAYS = 25
+
+
+def mas_dli_fetch_daily_bbg(tickers, start, end):
+    """Fetch daily Bloomberg data for MAS DLI."""
+    df = blp.bdh(tickers, "PX_LAST", start, end)
+    # flatten MultiIndex columns (xbbg sometimes returns MultiIndex)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    df.index = pd.to_datetime(df.index)
+    return df
+
+
+def mas_dli_to_monthly_bm_last(df_daily: pd.DataFrame) -> pd.DataFrame:
+    """
+    Resample daily to business-month-end (last obs),
+    then normalize index to month-start timestamps for clean labeling.
+    """
+    # Handle both old and new pandas frequency aliases
+    try:
+        m = df_daily.resample("BME").last()  # pandas >= 2.2
+    except ValueError:
+        m = df_daily.resample("BM").last()   # pandas < 2.2
+    m.index = m.index.to_period("M").to_timestamp()
+    return m
+
+
+def mas_dli_load_dli_csv(csv_path) -> pd.Series:
+    """Load MAS DLI 3-month change data from CSV."""
+    d = pd.read_csv(csv_path, parse_dates=["date"])
+    d["MAS_DLI_3m_change"] = pd.to_numeric(d["MAS_DLI_3m_change_pct"], errors="coerce")
+    d = d.dropna(subset=["date", "MAS_DLI_3m_change"]).copy()
+    d["date"] = d["date"].dt.to_period("M").dt.to_timestamp()
+    d = d.set_index("date").sort_index()
+    return d["MAS_DLI_3m_change"]
+
+
+def mas_dli_stacked_two_series_excel_like(ax, x, a, b, label_a, label_b, color_a, color_b, width_days):
+    """
+    Excel-like stacking for mixed signs:
+    - positives stack upward from 0
+    - negatives stack downward from 0
+    """
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+
+    a_pos = np.clip(a, 0, None)
+    a_neg = np.clip(a, None, 0)
+    b_pos = np.clip(b, 0, None)
+    b_neg = np.clip(b, None, 0)
+
+    ax.bar(x, a_pos, width=width_days, label=label_a, color=color_a, align="center")
+    ax.bar(x, a_neg, width=width_days, color=color_a, align="center")
+
+    ax.bar(x, b_pos, width=width_days, bottom=a_pos, label=label_b, color=color_b, align="center")
+    ax.bar(x, b_neg, width=width_days, bottom=a_neg, color=color_b, align="center")
+
+
+def mas_dli_compute_proxy_3m(neer_m: pd.Series, sora_m: pd.Series) -> pd.DataFrame:
+    """Compute 3-month proxy for MAS DLI."""
+    out = pd.DataFrame({"NEER": neer_m, "SORA": sora_m}).copy()
+
+    # 3m % change in NEER
+    out["NEER_3m_pct"] = (out["NEER"] / out["NEER"].shift(3) - 1.0) * 100.0
+    out["NEER_scaled_3m"] = out["NEER_3m_pct"] / MAS_DLI_NEER_VAR_DIV
+
+    # 3m pp change in SORA
+    out["SORA_3m_pp"] = out["SORA"] - out["SORA"].shift(3)
+
+    # contributions + proxy
+    out["NEER_contrib_3m"] = MAS_DLI_W_NEER * out["NEER_scaled_3m"]
+    out["SORA_contrib_3m"] = MAS_DLI_W_SORA * out["SORA_3m_pp"]
+    out["Proxy_SORA_3m"] = out["NEER_contrib_3m"] + out["SORA_contrib_3m"]
+
+    return out
+
+
+def mas_dli_compute_proxy_monthly_bc(neer_m: pd.Series, sora_m: pd.Series) -> pd.DataFrame:
+    """
+    Compute monthly change proxy (BC calculated):
+    - NEER leg uses monthly % change, variance-scaled (/2) before weighting in the proxy
+    - SORA leg uses monthly pp change
+    """
+    out = pd.DataFrame({"NEER": neer_m, "SORA": sora_m}).copy()
+
+    # monthly % change NEER
+    out["NEER_m_pct"] = (out["NEER"] / out["NEER"].shift(1) - 1.0) * 100.0
+
+    # monthly pp change SORA
+    out["SORA_m_pp"] = out["SORA"] - out["SORA"].shift(1)
+
+    # contributions used in the proxy (NEER variance-scaled)
+    out["NEER_contrib_m"] = MAS_DLI_W_NEER * (out["NEER_m_pct"] / MAS_DLI_NEER_VAR_DIV)
+    out["SORA_contrib_m"] = MAS_DLI_W_SORA * out["SORA_m_pp"]
+    out["Proxy_m"] = out["NEER_contrib_m"] + out["SORA_contrib_m"]
+
+    return out
+
+
+def mas_dli_plot_chart1_dli_vs_proxy(df_all: pd.DataFrame, save_path: Path = None):
+    """
+    Chart 1: MAS DLI vs Proxy (SORA only).
+    Proxy extends to the latest Bloomberg month; DLI stops where it stops.
+    """
+    fig, ax = plt.subplots(figsize=(12, 5))
+
+    # Plot proxy first so axis naturally extends to latest proxy date
+    ax.plot(df_all.index, df_all["Proxy_SORA_3m"], color=MAS_DLI_C_PROXY, linewidth=MAS_DLI_LINE_W,
+            label="Proxy (60% S$NEER & 40% SORA, variance scaled)")
+
+    ax.plot(df_all.index, df_all["MAS_DLI_3m"], color=MAS_DLI_C_DLI, linewidth=MAS_DLI_LINE_W,
+            label="MAS DLI")
+
+    ax.set_title("MAS DLI and Proxy")
+    ax.grid(True, axis="y", alpha=0.3)
+
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=6))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b-%y"))
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+
+    ax.set_ylim(top=1.5)
+    ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.35), frameon=False, ncol=1)
+    plt.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Saved MAS DLI Chart 1 to: {save_path}")
+
+    return fig, ax
+
+
+def mas_dli_plot_chart2_stacked_3m_with_lines(df_all: pd.DataFrame, start="2019-01-01", save_path: Path = None):
+    """
+    Chart 2: thick stacked bars (NEER + SORA contributions, 3m),
+    plus MAS DLI and Proxy lines, plus black y=0 line.
+    """
+    d = df_all[df_all.index >= pd.Timestamp(start)].copy()
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+
+    mas_dli_stacked_two_series_excel_like(
+        ax=ax,
+        x=d.index,
+        a=d["NEER_contrib_3m"],
+        b=d["SORA_contrib_3m"],
+        label_a="S$NEER contribution",
+        label_b="SORA contribution",
+        color_a=MAS_DLI_C_NEER_BAR,
+        color_b=MAS_DLI_C_SORA_BAR,
+        width_days=MAS_DLI_BAR_WIDTH_DAYS,
+    )
+
+    # overlay lines
+    ax.plot(d.index, d["MAS_DLI_3m"], color=MAS_DLI_C_DLI, linewidth=MAS_DLI_LINE_W, label="MAS DLI")
+    ax.plot(d.index, d["Proxy_SORA_3m"], color=MAS_DLI_C_PROXY, linewidth=MAS_DLI_LINE_W,
+            label="Proxy (60% S$NEER & 40% SORA, variance scaled)")
+
+    ax.axhline(0, color=MAS_DLI_C_ZERO, linewidth=1.2)
+
+    ax.set_title("MAS DLI and Proxy (change over three months)")
+    ax.grid(True, axis="y", alpha=0.3)
+
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b-%y"))
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+
+    ax.set_ylim(-1.0, 1.5)
+    ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.40), frameon=False, ncol=1)
+    plt.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Saved MAS DLI Chart 2 to: {save_path}")
+
+    return fig, ax
+
+
+def mas_dli_plot_chart3_monthly_bc(df_m: pd.DataFrame, start=None, save_path: Path = None):
+    """
+    Chart 3: DLI Proxy (monthly change, BC calculated).
+    Thick stacked bars (variance-scaled NEER contrib + SORA contrib), optional proxy line, black y=0 line.
+    """
+    d = df_m.copy()
+    if start is not None:
+        d = d[d.index >= pd.Timestamp(start)].copy()
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+
+    mas_dli_stacked_two_series_excel_like(
+        ax=ax,
+        x=d.index,
+        a=d["NEER_contrib_m"],
+        b=d["SORA_contrib_m"],
+        label_a="S$NEER contribution (monthly, variance scaled)",
+        label_b="SORA contribution (monthly)",
+        color_a=MAS_DLI_C_NEER_BAR,
+        color_b=MAS_DLI_C_SORA_BAR,
+        width_days=MAS_DLI_BAR_WIDTH_DAYS,
+    )
+
+    # optional proxy line
+    ax.plot(d.index, d["Proxy_m"], color=MAS_DLI_C_PROXY, linewidth=MAS_DLI_LINE_W, label="Proxy (monthly change)")
+
+    ax.axhline(0, color=MAS_DLI_C_ZERO, linewidth=1.2)
+
+    ax.set_title("DLI Proxy (monthly change, BC calculated)")
+    ax.grid(True, axis="y", alpha=0.3)
+
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b-%y"))
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+
+    ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.40), frameon=False, ncol=1)
+    plt.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Saved MAS DLI Chart 3 to: {save_path}")
+
+    return fig, ax
+
+
+# --- Generate and save MAS DLI charts (combined into one figure with 3 subplots) ---
+MAS_DLI_OUTFILE = G_CHART_DIR / "MAS_DLI_Charts.png"
+
+# 1) Load DLI (monthly index, already 3m change series) from CSV
+mas_dli_3m = mas_dli_load_dli_csv(MAS_DLI_CSV_PATH)
+print(f"MAS DLI CSV loaded: {len(mas_dli_3m)} points, range {mas_dli_3m.index.min()} to {mas_dli_3m.index.max()}")
+
+# 2) Pull daily from Bloomberg and convert to monthly
+mas_dli_daily = mas_dli_fetch_daily_bbg([MAS_DLI_TICKER_NEER, MAS_DLI_TICKER_SORA], MAS_DLI_START_DATE, MAS_DLI_END_DATE)
+mas_dli_m = mas_dli_to_monthly_bm_last(mas_dli_daily)
+print(f"Bloomberg monthly data: {len(mas_dli_m)} points, range {mas_dli_m.index.min()} to {mas_dli_m.index.max()}")
+
+# 3) Compute proxy (3m) & monthly proxy (BC)
+mas_dli_proxy_3m = mas_dli_compute_proxy_3m(mas_dli_m[MAS_DLI_TICKER_NEER], mas_dli_m[MAS_DLI_TICKER_SORA])
+mas_dli_proxy_m = mas_dli_compute_proxy_monthly_bc(mas_dli_m[MAS_DLI_TICKER_NEER], mas_dli_m[MAS_DLI_TICKER_SORA])
+
+# 4) Normalize timestamps to ensure proper join
+# Convert both indexes to the same format (Period -> start timestamp)
+mas_dli_proxy_3m.index = mas_dli_proxy_3m.index.to_period('M').to_timestamp()
+mas_dli_3m.index = mas_dli_3m.index.to_period('M').to_timestamp()
+
+# 5) Combine for chart 1 & 2.
+# IMPORTANT: use proxy index as the master index so proxy plots to latest even if DLI ends earlier.
+mas_dli_df_all = mas_dli_proxy_3m.join(mas_dli_3m.rename("MAS_DLI_3m"), how="left")
+print(f"After join: MAS_DLI_3m non-null count = {mas_dli_df_all['MAS_DLI_3m'].notna().sum()}")
+
+# drop early rows where 3m proxy can't be computed yet
+mas_dli_df_all = mas_dli_df_all.dropna(subset=["Proxy_SORA_3m", "NEER_contrib_3m", "SORA_contrib_3m"], how="any")
+print(f"After dropna: {len(mas_dli_df_all)} rows, MAS_DLI_3m non-null = {mas_dli_df_all['MAS_DLI_3m'].notna().sum()}")
+
+# Prepare data for charts
+mas_dli_df_chart2 = mas_dli_df_all[mas_dli_df_all.index >= pd.Timestamp("2019-01-01")].copy()
+mas_dli_proxy_m = mas_dli_proxy_m.dropna(subset=["Proxy_m", "NEER_contrib_m", "SORA_contrib_m"])
+
+# Filter Monthly BC to last 2 years
+mas_dli_two_years_ago = pd.Timestamp.now() - pd.DateOffset(years=2)
+mas_dli_proxy_m_2y = mas_dli_proxy_m[mas_dli_proxy_m.index >= mas_dli_two_years_ago].copy()
+
+# Create figure with 3 subplots (vertically stacked)
+mas_dli_fig, (mas_dli_ax1, mas_dli_ax2, mas_dli_ax3) = plt.subplots(3, 1, figsize=(14, 15))
+
+# ---- Subplot 1: MAS DLI vs Proxy ----
+# Plot proxy first (extends to latest), then DLI on top
+mas_dli_ax1.plot(mas_dli_df_all.index, mas_dli_df_all["Proxy_SORA_3m"], color=MAS_DLI_C_PROXY, linewidth=MAS_DLI_LINE_W,
+        label="Proxy (60% S$NEER & 40% SORA, variance scaled)")
+mas_dli_ax1.plot(mas_dli_df_all.index, mas_dli_df_all["MAS_DLI_3m"], color=MAS_DLI_C_DLI, linewidth=MAS_DLI_LINE_W,
+        label="MAS DLI")
+mas_dli_ax1.set_title("MAS DLI and Proxy", fontsize=12, fontweight='bold')
+mas_dli_ax1.grid(True, axis="y", alpha=0.3)
+mas_dli_ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=6))
+mas_dli_ax1.xaxis.set_major_formatter(mdates.DateFormatter("%b-%y"))
+plt.setp(mas_dli_ax1.get_xticklabels(), rotation=45, ha="right")
+mas_dli_ax1.set_ylim(top=1.5)
+mas_dli_ax1.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+mas_dli_ax1.legend(loc="upper right", fontsize=9)
+
+# Add latest value labels for subplot 1
+mas_dli_proxy_last = mas_dli_df_all["Proxy_SORA_3m"].dropna()
+if len(mas_dli_proxy_last) > 0:
+    mas_dli_proxy_last_date = mas_dli_proxy_last.index[-1]
+    mas_dli_proxy_last_val = mas_dli_proxy_last.iloc[-1]
+    mas_dli_ax1.annotate(f"{mas_dli_proxy_last_val:.2f}", xy=(mas_dli_proxy_last_date, mas_dli_proxy_last_val),
+                         xytext=(5, 0), textcoords='offset points', fontsize=9, color=MAS_DLI_C_PROXY,
+                         bbox=dict(facecolor='white', edgecolor=MAS_DLI_C_PROXY, alpha=0.8, boxstyle='round,pad=0.2'))
+mas_dli_dli_last = mas_dli_df_all["MAS_DLI_3m"].dropna()
+if len(mas_dli_dli_last) > 0:
+    mas_dli_dli_last_date = mas_dli_dli_last.index[-1]
+    mas_dli_dli_last_val = mas_dli_dli_last.iloc[-1]
+    mas_dli_ax1.annotate(f"{mas_dli_dli_last_val:.2f}", xy=(mas_dli_dli_last_date, mas_dli_dli_last_val),
+                         xytext=(5, -15), textcoords='offset points', fontsize=9, color=MAS_DLI_C_DLI,
+                         bbox=dict(facecolor='white', edgecolor=MAS_DLI_C_DLI, alpha=0.8, boxstyle='round,pad=0.2'))
+
+# ---- Subplot 2: Stacked 3m with lines (since 2019) ----
+mas_dli_stacked_two_series_excel_like(
+    ax=mas_dli_ax2,
+    x=mas_dli_df_chart2.index,
+    a=mas_dli_df_chart2["NEER_contrib_3m"],
+    b=mas_dli_df_chart2["SORA_contrib_3m"],
+    label_a="S$NEER contribution",
+    label_b="SORA contribution",
+    color_a=MAS_DLI_C_NEER_BAR,
+    color_b=MAS_DLI_C_SORA_BAR,
+    width_days=MAS_DLI_BAR_WIDTH_DAYS,
+)
+# Overlay lines on top of bars
+mas_dli_ax2.plot(mas_dli_df_chart2.index, mas_dli_df_chart2["MAS_DLI_3m"], color=MAS_DLI_C_DLI, linewidth=MAS_DLI_LINE_W, label="MAS DLI")
+mas_dli_ax2.plot(mas_dli_df_chart2.index, mas_dli_df_chart2["Proxy_SORA_3m"], color=MAS_DLI_C_PROXY, linewidth=MAS_DLI_LINE_W,
+        label="Proxy (60% S$NEER & 40% SORA, variance scaled)")
+mas_dli_ax2.axhline(0, color=MAS_DLI_C_ZERO, linewidth=1.2)
+mas_dli_ax2.set_title("MAS DLI and Proxy (change over three months, since 2019)", fontsize=12, fontweight='bold')
+mas_dli_ax2.grid(True, axis="y", alpha=0.3)
+mas_dli_ax2.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+mas_dli_ax2.xaxis.set_major_formatter(mdates.DateFormatter("%b-%y"))
+plt.setp(mas_dli_ax2.get_xticklabels(), rotation=45, ha="right")
+mas_dli_ax2.set_ylim(-1.0, 1.5)
+mas_dli_ax2.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+mas_dli_ax2.legend(loc="upper right", fontsize=9)
+
+# Add latest value labels for subplot 2
+mas_dli_proxy_last2 = mas_dli_df_chart2["Proxy_SORA_3m"].dropna()
+if len(mas_dli_proxy_last2) > 0:
+    mas_dli_proxy_last2_date = mas_dli_proxy_last2.index[-1]
+    mas_dli_proxy_last2_val = mas_dli_proxy_last2.iloc[-1]
+    mas_dli_ax2.annotate(f"{mas_dli_proxy_last2_val:.2f}", xy=(mas_dli_proxy_last2_date, mas_dli_proxy_last2_val),
+                         xytext=(5, 0), textcoords='offset points', fontsize=9, color=MAS_DLI_C_PROXY,
+                         bbox=dict(facecolor='white', edgecolor=MAS_DLI_C_PROXY, alpha=0.8, boxstyle='round,pad=0.2'))
+mas_dli_dli_last2 = mas_dli_df_chart2["MAS_DLI_3m"].dropna()
+if len(mas_dli_dli_last2) > 0:
+    mas_dli_dli_last2_date = mas_dli_dli_last2.index[-1]
+    mas_dli_dli_last2_val = mas_dli_dli_last2.iloc[-1]
+    mas_dli_ax2.annotate(f"{mas_dli_dli_last2_val:.2f}", xy=(mas_dli_dli_last2_date, mas_dli_dli_last2_val),
+                         xytext=(5, -15), textcoords='offset points', fontsize=9, color=MAS_DLI_C_DLI,
+                         bbox=dict(facecolor='white', edgecolor=MAS_DLI_C_DLI, alpha=0.8, boxstyle='round,pad=0.2'))
+
+# ---- Subplot 3: Monthly BC (last 2 years only) ----
+mas_dli_stacked_two_series_excel_like(
+    ax=mas_dli_ax3,
+    x=mas_dli_proxy_m_2y.index,
+    a=mas_dli_proxy_m_2y["NEER_contrib_m"],
+    b=mas_dli_proxy_m_2y["SORA_contrib_m"],
+    label_a="S$NEER contribution (monthly, variance scaled)",
+    label_b="SORA contribution (monthly)",
+    color_a=MAS_DLI_C_NEER_BAR,
+    color_b=MAS_DLI_C_SORA_BAR,
+    width_days=MAS_DLI_BAR_WIDTH_DAYS,
+)
+mas_dli_ax3.plot(mas_dli_proxy_m_2y.index, mas_dli_proxy_m_2y["Proxy_m"], color=MAS_DLI_C_PROXY, linewidth=MAS_DLI_LINE_W, label="Proxy (monthly change)")
+mas_dli_ax3.axhline(0, color=MAS_DLI_C_ZERO, linewidth=1.2)
+mas_dli_ax3.set_title("DLI Proxy (monthly change, BC calculated, last 2 years)", fontsize=12, fontweight='bold')
+mas_dli_ax3.grid(True, axis="y", alpha=0.3)
+mas_dli_ax3.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+mas_dli_ax3.xaxis.set_major_formatter(mdates.DateFormatter("%b-%y"))
+plt.setp(mas_dli_ax3.get_xticklabels(), rotation=45, ha="right")
+mas_dli_ax3.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+mas_dli_ax3.legend(loc="upper right", fontsize=9)
+
+# Add latest value label for subplot 3
+mas_dli_proxy_m_last = mas_dli_proxy_m_2y["Proxy_m"].dropna()
+if len(mas_dli_proxy_m_last) > 0:
+    mas_dli_proxy_m_last_date = mas_dli_proxy_m_last.index[-1]
+    mas_dli_proxy_m_last_val = mas_dli_proxy_m_last.iloc[-1]
+    mas_dli_ax3.annotate(f"{mas_dli_proxy_m_last_val:.2f}", xy=(mas_dli_proxy_m_last_date, mas_dli_proxy_m_last_val),
+                         xytext=(5, 0), textcoords='offset points', fontsize=9, color=MAS_DLI_C_PROXY,
+                         bbox=dict(facecolor='white', edgecolor=MAS_DLI_C_PROXY, alpha=0.8, boxstyle='round,pad=0.2'))
+
+# Add last data date annotation to the figure
+mas_dli_last_data_date = mas_dli_proxy_m_last_date.strftime('%d %b %Y') if len(mas_dli_proxy_m_last) > 0 else "N/A"
+mas_dli_fig.text(0.98, 0.98, f"Last data: {mas_dli_last_data_date}", transform=mas_dli_fig.transFigure,
+                 fontsize=10, ha='right', va='top',
+                 bbox=dict(facecolor='white', edgecolor='gray', alpha=0.9, boxstyle='round,pad=0.3'))
+
+plt.tight_layout()
+plt.savefig(MAS_DLI_OUTFILE, dpi=150, bbox_inches='tight')
+print(f"Saved MAS DLI chart to: {MAS_DLI_OUTFILE}")
+
+print("MAS DLI charts generated successfully.")
+
+# =============================================================================
+# KOREA MMF TOTAL AUM CHART
+# =============================================================================
+print("\n" + "="*60)
+print("Generating Korea MMF Total AUM chart...")
+print("="*60)
+
+# Import MMF crawler functions
+try:
+    from crawl_mmf_aum import load_cache as mmf_load_cache, save_cache as mmf_save_cache, crawl_mmf_trend, plot_mmf_chart
+    MMF_CRAWLER_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Could not import crawl_mmf_aum module: {e}")
+    MMF_CRAWLER_AVAILABLE = False
+
+# MMF Configuration
+MMF_SCRIPT_DIR = Path(os.path.dirname(__file__))
+MMF_CACHE_FILE = MMF_SCRIPT_DIR / "mmf_aum_cache.csv"
+MMF_OUTFILE = Path(G_CHART_DIR) / "korea_mmf_aum.png"
+
+def plot_mmf_chart_for_updater(df, output_path):
+    """Plot MMF Total AUM (last 1 year) with 30-day change subplot. Units in KRW trillion."""
+    if df.empty:
+        print("No MMF data to plot")
+        return
+
+    df = df.sort_values("date").copy()
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.drop_duplicates(subset=["date"], keep="last")
+
+    # Convert units: 100 million KRW -> KRW trillion (divide by 10000)
+    df["mmf_aum_tn"] = df["mmf_total_aum"] / 10000.0
+
+    # Filter to last 1 year
+    one_year_ago = pd.Timestamp.today().normalize() - pd.DateOffset(years=1)
+    df_1y = df[df["date"] >= one_year_ago].copy()
+
+    if df_1y.empty:
+        print("No MMF data in the last year")
+        return
+
+    # Calculate 30 calendar day change
+    df_1y = df_1y.set_index("date").sort_index()
+    df_1y["change_30d"] = df_1y["mmf_aum_tn"].diff(30)  # Approximate 30 calendar days
+
+    # Create figure with 2 subplots
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), height_ratios=[1.2, 1])
+
+    # --- Subplot 1: MMF Total AUM (last 1 year) ---
+    dates = df_1y.index
+    values = df_1y["mmf_aum_tn"].values
+
+    # Plot as line with segments (break at gaps > 5 days)
+    segments_x = []
+    segments_y = []
+    current_x = [dates[0]]
+    current_y = [values[0]]
+
+    for i in range(1, len(dates)):
+        gap_days = (dates[i] - dates[i-1]).days
+        if gap_days > 5:
+            segments_x.append(current_x)
+            segments_y.append(current_y)
+            current_x = [dates[i]]
+            current_y = [values[i]]
+        else:
+            current_x.append(dates[i])
+            current_y.append(values[i])
+
+    segments_x.append(current_x)
+    segments_y.append(current_y)
+
+    # Plot each segment
+    for seg_x, seg_y in zip(segments_x, segments_y):
+        ax1.plot(seg_x, seg_y, linewidth=1.5, color="#1f77b4")
+
+    # Add light fill under the data
+    ax1.fill_between(df_1y.index, df_1y["mmf_aum_tn"], alpha=0.1, color="#1f77b4")
+
+    ax1.set_title("Korea MMF Total AUM (in KRW tn) - Last 1 Year", fontsize=14, fontweight="bold")
+    ax1.set_ylabel("MMF Total AUM (KRW tn)")
+
+    # Format y-axis with 1 decimal
+    from matplotlib.ticker import FuncFormatter
+    ax1.yaxis.set_major_formatter(FuncFormatter(lambda x, p: f"{x:,.1f}"))
+
+    # Format x-axis dates
+    ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+    plt.setp(ax1.get_xticklabels(), rotation=45, ha="right")
+
+    ax1.grid(True, alpha=0.3)
+    ax1.set_xlim(df_1y.index.min(), df_1y.index.max())
+
+    # Add latest value annotation
+    last_date = df_1y.index[-1]
+    last_val = df_1y["mmf_aum_tn"].iloc[-1]
+    ax1.annotate(f"{last_val:,.1f}", xy=(last_date, last_val),
+                xytext=(5, 0), textcoords='offset points', fontsize=10, color="#1f77b4",
+                bbox=dict(facecolor='white', edgecolor="#1f77b4", alpha=0.8, boxstyle='round,pad=0.2'))
+
+    # --- Subplot 2: 30-Day Change ---
+    change_data = df_1y["change_30d"].dropna()
+    if not change_data.empty:
+        # Color bars based on positive/negative
+        colors = ['#2ca02c' if x >= 0 else '#d62728' for x in change_data.values]
+        ax2.bar(change_data.index, change_data.values, color=colors, alpha=0.7, width=1)
+        ax2.axhline(0, color='black', linewidth=0.8)
+
+        ax2.set_title("30-Day Change (in KRW tn)", fontsize=12, fontweight="bold")
+        ax2.set_ylabel("Change (KRW tn)")
+        ax2.yaxis.set_major_formatter(FuncFormatter(lambda x, p: f"{x:,.1f}"))
+
+        # Format x-axis dates
+        ax2.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+        ax2.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+        plt.setp(ax2.get_xticklabels(), rotation=45, ha="right")
+
+        ax2.grid(True, alpha=0.3, axis='y')
+        ax2.set_xlim(df_1y.index.min(), df_1y.index.max())
+
+        # Add latest change value annotation
+        last_change_date = change_data.index[-1]
+        last_change_val = change_data.iloc[-1]
+        change_color = '#2ca02c' if last_change_val >= 0 else '#d62728'
+        ax2.annotate(f"{last_change_val:+,.1f}", xy=(last_change_date, last_change_val),
+                    xytext=(5, 0), textcoords='offset points', fontsize=10, color=change_color,
+                    bbox=dict(facecolor='white', edgecolor=change_color, alpha=0.8, boxstyle='round,pad=0.2'))
+
+    # Add last data date annotation to figure
+    fig.text(0.98, 0.98, f"Last data: {last_date.strftime('%d %b %Y')}", transform=fig.transFigure,
+             fontsize=10, ha='right', va='top',
+             bbox=dict(facecolor='white', edgecolor='gray', alpha=0.9, boxstyle='round,pad=0.3'))
+
+    plt.tight_layout()
+    plt.savefig(str(output_path), dpi=150, bbox_inches="tight")
+    print(f"Saved MMF chart to: {output_path}")
+    plt.close()
+
+# Run MMF crawler and generate chart
+if MMF_CRAWLER_AVAILABLE:
+    try:
+        # Load existing cache
+        mmf_cache_df = mmf_load_cache()
+        print(f"Existing MMF cache: {len(mmf_cache_df)} records")
+
+        # Determine if we need to fetch new data
+        mmf_needs_update = True
+        if len(mmf_cache_df) > 0:
+            mmf_cache_max_date = mmf_cache_df["date"].max()
+            mmf_today = pd.Timestamp.today().normalize()
+            # Only update if cache is more than 1 day old
+            if (mmf_today - mmf_cache_max_date).days <= 1:
+                print(f"MMF cache is up to date (last data: {mmf_cache_max_date.strftime('%Y-%m-%d')})")
+                mmf_needs_update = False
+
+        if mmf_needs_update:
+            print("Fetching new MMF data from KOFIA...")
+            # Calculate start date for incremental update
+            if len(mmf_cache_df) > 0:
+                mmf_start_date = (mmf_cache_df["date"].max() + timedelta(days=1)).strftime("%Y-%m-%d")
+            else:
+                mmf_start_date = "2017-01-01"
+            mmf_end_date = datetime.today().strftime("%Y-%m-%d")
+
+            # Run crawler
+            mmf_new_df = crawl_mmf_trend(
+                start_date=mmf_start_date,
+                end_date=mmf_end_date,
+                headless=True
+            )
+
+            # Merge with existing cache
+            if mmf_new_df is not None and len(mmf_new_df) > 0:
+                if len(mmf_cache_df) > 0:
+                    mmf_combined = pd.concat([mmf_cache_df, mmf_new_df], ignore_index=True)
+                else:
+                    mmf_combined = mmf_new_df
+                mmf_save_cache(mmf_combined)
+                mmf_df = mmf_combined
+                print(f"Updated MMF cache: {len(mmf_df)} total records")
+            else:
+                mmf_df = mmf_cache_df
+                print("No new MMF data fetched, using existing cache")
+        else:
+            mmf_df = mmf_cache_df
+
+        # Generate chart
+        if len(mmf_df) > 0:
+            plot_mmf_chart_for_updater(mmf_df, MMF_OUTFILE)
+            print("Korea MMF chart generated successfully.")
+        else:
+            print("No MMF data available to plot")
+
+    except Exception as e:
+        print(f"Error processing MMF data: {e}")
+        import traceback
+        traceback.print_exc()
+else:
+    print("MMF crawler not available. Skipping MMF chart generation.")
+
+# =============================================================================
+# INDIA IT SERVICES COMPANIES CHART
+# =============================================================================
+print("\n" + "="*60)
+print("Generating India IT Services Companies chart...")
+print("="*60)
+
+# Configuration
+INDIA_IT_TICKERS = ['TCS IN Equity', 'WPRO IN Equity', 'HCLT IN Equity', 'INFO IN Equity', 'CTSH US Equity']
+INDIA_IT_NAMES = {
+    'TCS IN Equity': 'TCS',
+    'WPRO IN Equity': 'Wipro',
+    'HCLT IN Equity': 'HCL Tech',
+    'INFO IN Equity': 'Infosys',
+    'CTSH US Equity': 'Cognizant'
+}
+INDIA_SERVICES_EXPORT_TICKER = 'INITSEXP Index'
+NIFTY_TICKER = 'NIFTY Index'
+INDIA_IT_START_DATE = datetime(2010, 1, 1)
+INDIA_IT_END_DATE = datetime.today()
+INDIA_IT_OUTFILE = Path(G_CHART_DIR) / "india_it_services.png"
+
+try:
+    # --- Fetch Revenue Growth Data (RR033) ---
+    print("Fetching revenue growth data (RR033)...")
+    revenue_growth_raw = blp.bdh(
+        tickers=INDIA_IT_TICKERS,
+        flds=['RR033'],
+        start_date=INDIA_IT_START_DATE,
+        end_date=INDIA_IT_END_DATE
+    )
+    # Flatten multi-index columns
+    if isinstance(revenue_growth_raw.columns, pd.MultiIndex):
+        revenue_growth_raw.columns = [col[0] for col in revenue_growth_raw.columns]
+    revenue_growth_raw.index = pd.to_datetime(revenue_growth_raw.index)
+
+    # Calculate average revenue growth across companies
+    revenue_growth_avg = revenue_growth_raw.mean(axis=1).dropna()
+    revenue_growth_avg.name = 'Avg Revenue Growth YoY'
+
+    # --- Fetch India Services Exports Data ---
+    print("Fetching India services exports data...")
+    services_export_raw = blp.bdh(
+        tickers=[INDIA_SERVICES_EXPORT_TICKER],
+        flds=['PX_LAST'],
+        start_date=INDIA_IT_START_DATE,
+        end_date=INDIA_IT_END_DATE
+    )
+    if isinstance(services_export_raw.columns, pd.MultiIndex):
+        services_export_raw.columns = [col[0] for col in services_export_raw.columns]
+    services_export_raw.index = pd.to_datetime(services_export_raw.index)
+    services_export = services_export_raw.iloc[:, 0].dropna()
+
+    # Calculate rolling 12-month sum and YoY growth
+    services_export_12m = services_export.rolling(window=12, min_periods=12).sum()
+    services_export_yoy = services_export_12m.pct_change(periods=12) * 100
+    services_export_yoy = services_export_yoy.dropna()
+    services_export_yoy.name = 'India Services Exports YoY%'
+
+    # --- Fetch Share Prices (PX_LAST) ---
+    print("Fetching share price data...")
+    prices_raw = blp.bdh(
+        tickers=INDIA_IT_TICKERS + [NIFTY_TICKER],
+        flds=['PX_LAST'],
+        start_date=INDIA_IT_START_DATE,
+        end_date=INDIA_IT_END_DATE
+    )
+    if isinstance(prices_raw.columns, pd.MultiIndex):
+        prices_raw.columns = [col[0] for col in prices_raw.columns]
+    prices_raw.index = pd.to_datetime(prices_raw.index)
+
+    # Find common start date where all companies have data
+    prices_companies = prices_raw[INDIA_IT_TICKERS].dropna()
+    if not prices_companies.empty:
+        common_start = prices_companies.index[0]
+        prices_companies = prices_companies[prices_companies.index >= common_start]
+
+        # Create index (base = 100 at common start)
+        prices_indexed = (prices_companies / prices_companies.iloc[0]) * 100
+
+        # Create equal-weighted index of IT companies
+        it_index = prices_indexed.mean(axis=1)
+        it_index.name = 'IT Services Index'
+
+        # Get NIFTY and rebase
+        nifty_prices = prices_raw[NIFTY_TICKER].dropna()
+        nifty_prices = nifty_prices[nifty_prices.index >= common_start]
+        if not nifty_prices.empty:
+            nifty_indexed = (nifty_prices / nifty_prices.iloc[0]) * 100
+            nifty_indexed.name = 'NIFTY Index'
+
+            # Calculate relative performance (IT Index / NIFTY)
+            common_idx = it_index.index.intersection(nifty_indexed.index)
+            relative_perf = (it_index.loc[common_idx] / nifty_indexed.loc[common_idx]) * 100
+            relative_perf.name = 'IT vs NIFTY (Relative)'
+        else:
+            nifty_indexed = pd.Series()
+            relative_perf = pd.Series()
+    else:
+        it_index = pd.Series()
+        nifty_indexed = pd.Series()
+        relative_perf = pd.Series()
+
+    # --- Fetch Employee Count Data (RR121) ---
+    print("Fetching employee count data (RR121)...")
+    employees_raw = blp.bdh(
+        tickers=INDIA_IT_TICKERS,
+        flds=['RR121'],
+        start_date=INDIA_IT_START_DATE,
+        end_date=INDIA_IT_END_DATE
+    )
+    if isinstance(employees_raw.columns, pd.MultiIndex):
+        employees_raw.columns = [col[0] for col in employees_raw.columns]
+    employees_raw.index = pd.to_datetime(employees_raw.index)
+
+    # Find company with most missing data in past 5 years and drop it
+    five_years_ago = pd.Timestamp.today().normalize() - pd.DateOffset(years=5)
+    employees_5y = employees_raw[employees_raw.index >= five_years_ago]
+    if not employees_5y.empty and len(employees_5y.columns) > 1:
+        missing_counts = employees_5y.isna().sum()
+        worst_company = missing_counts.idxmax()
+        worst_missing = missing_counts.max()
+        print(f"  Company with most missing employee data (past 5y): {worst_company} ({worst_missing} missing)")
+        # Drop the worst company
+        employees_filtered = employees_raw.drop(columns=[worst_company])
+        print(f"  Dropping {worst_company} from employee analysis. Using remaining {len(employees_filtered.columns)} companies.")
+    else:
+        employees_filtered = employees_raw
+
+    # Calculate total employees - only for dates where ALL remaining companies have data
+    employees_complete = employees_filtered.dropna(how='any')
+    employees_total = employees_complete.sum(axis=1)
+    employees_total.name = 'Total Employees'
+    # Forward fill to get continuous series for rolling calculation
+    if not employees_total.empty:
+        employees_total_filled = employees_total.asfreq('D').ffill()
+        employees_12m_change = employees_total_filled.diff(periods=365)  # Approximate 12 months
+        employees_12m_change = employees_12m_change.dropna()
+        employees_12m_change.name = '12M Change'
+    else:
+        employees_12m_change = pd.Series()
+
+    # --- Fetch Margin Data (RR057 Gross Margin, RR243 Profit Margin) ---
+    print("Fetching margin data (RR057, RR243)...")
+    gross_margin_raw = blp.bdh(
+        tickers=INDIA_IT_TICKERS,
+        flds=['RR057'],
+        start_date=INDIA_IT_START_DATE,
+        end_date=INDIA_IT_END_DATE
+    )
+    if isinstance(gross_margin_raw.columns, pd.MultiIndex):
+        gross_margin_raw.columns = [col[0] for col in gross_margin_raw.columns]
+    gross_margin_raw.index = pd.to_datetime(gross_margin_raw.index)
+    gross_margin_avg = gross_margin_raw.mean(axis=1).dropna()
+    gross_margin_avg.name = 'Avg Gross Margin'
+
+    profit_margin_raw = blp.bdh(
+        tickers=INDIA_IT_TICKERS,
+        flds=['RR243'],
+        start_date=INDIA_IT_START_DATE,
+        end_date=INDIA_IT_END_DATE
+    )
+    if isinstance(profit_margin_raw.columns, pd.MultiIndex):
+        profit_margin_raw.columns = [col[0] for col in profit_margin_raw.columns]
+    profit_margin_raw.index = pd.to_datetime(profit_margin_raw.index)
+    profit_margin_avg = profit_margin_raw.mean(axis=1).dropna()
+    profit_margin_avg.name = 'Avg Profit Margin'
+
+    # --- Create the Chart ---
+    print("Creating India IT Services chart...")
+    fig, axes = plt.subplots(4, 1, figsize=(14, 20))
+    ax1, ax2, ax3, ax4 = axes
+
+    # === Subplot 1: Revenue Growth vs India Services Exports (same scale) ===
+    if not revenue_growth_avg.empty:
+        ax1.plot(revenue_growth_avg.index, revenue_growth_avg.values, color='tab:blue', linewidth=2,
+                 label='IT Companies Avg Revenue Growth YoY%', marker='o', markersize=3)
+    if not services_export_yoy.empty:
+        ax1.plot(services_export_yoy.index, services_export_yoy.values, color='tab:orange', linewidth=2,
+                 label='India Services Exports YoY%', linestyle='--')
+
+    ax1.set_title("IT Companies Revenue Growth vs India Services Exports Growth (YoY%)", fontsize=12, fontweight='bold')
+    ax1.set_ylabel("YoY Growth %")
+    ax1.axhline(0, color='gray', linewidth=0.8, linestyle='--')
+    ax1.grid(True, alpha=0.3)
+    ax1.xaxis.set_major_locator(mdates.YearLocator())
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    plt.setp(ax1.get_xticklabels(), rotation=45, ha='right')
+    ax1.legend(loc='upper left', fontsize=9)
+
+    # Add latest values
+    if not revenue_growth_avg.empty:
+        last_rev_date = revenue_growth_avg.index[-1]
+        last_rev_val = revenue_growth_avg.iloc[-1]
+        ax1.annotate(f"{last_rev_val:.1f}%", xy=(last_rev_date, last_rev_val),
+                     xytext=(5, 0), textcoords='offset points', fontsize=9, color='tab:blue',
+                     bbox=dict(facecolor='white', edgecolor='tab:blue', alpha=0.8, boxstyle='round,pad=0.2'))
+    if not services_export_yoy.empty:
+        last_exp_date = services_export_yoy.index[-1]
+        last_exp_val = services_export_yoy.iloc[-1]
+        ax1.annotate(f"{last_exp_val:.1f}%", xy=(last_exp_date, last_exp_val),
+                     xytext=(5, -15), textcoords='offset points', fontsize=9, color='tab:orange',
+                     bbox=dict(facecolor='white', edgecolor='tab:orange', alpha=0.8, boxstyle='round,pad=0.2'))
+
+    # === Subplot 2: Share Price Index vs NIFTY ===
+    if not it_index.empty:
+        ax2.plot(it_index.index, it_index.values, color='tab:blue', linewidth=2, label='IT Services Index')
+    if not nifty_indexed.empty:
+        ax2.plot(nifty_indexed.index, nifty_indexed.values, color='tab:green', linewidth=2, label='NIFTY Index')
+
+    ax2_twin = ax2.twinx()
+    if not relative_perf.empty:
+        ax2_twin.plot(relative_perf.index, relative_perf.values, color='tab:red', linewidth=1.5,
+                      label='IT vs NIFTY (Relative)', linestyle='--', alpha=0.7)
+        ax2_twin.axhline(100, color='tab:red', linewidth=0.8, linestyle=':', alpha=0.5)
+
+    ax2.set_title("IT Services Share Price Index vs NIFTY (Base=100 at common start)", fontsize=12, fontweight='bold')
+    ax2.set_ylabel("Index Level", color='black')
+    ax2_twin.set_ylabel("Relative Performance", color='tab:red')
+    ax2_twin.tick_params(axis='y', labelcolor='tab:red')
+    ax2.grid(True, alpha=0.3)
+    ax2.xaxis.set_major_locator(mdates.YearLocator())
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    plt.setp(ax2.get_xticklabels(), rotation=45, ha='right')
+
+    # Combined legend
+    lines1, labels1 = ax2.get_legend_handles_labels()
+    lines2, labels2 = ax2_twin.get_legend_handles_labels()
+    ax2.legend(lines1 + lines2, labels1 + labels2, loc='upper left', fontsize=9)
+
+    # Add latest values
+    if not it_index.empty:
+        last_it_date = it_index.index[-1]
+        last_it_val = it_index.iloc[-1]
+        ax2.annotate(f"{last_it_val:.0f}", xy=(last_it_date, last_it_val),
+                     xytext=(5, 5), textcoords='offset points', fontsize=9, color='tab:blue',
+                     bbox=dict(facecolor='white', edgecolor='tab:blue', alpha=0.8, boxstyle='round,pad=0.2'))
+
+    # === Subplot 3: Employee Count ===
+    if not employees_total.empty:
+        ax3.plot(employees_total.index, employees_total.values / 1000, color='tab:blue', linewidth=2,
+                 label='Total Employees (thousands)', marker='o', markersize=3)
+
+    ax3_twin = ax3.twinx()
+    if not employees_12m_change.empty:
+        # Resample to show cleaner 12m change data
+        employees_12m_sampled = employees_12m_change.resample('Q').last().dropna()
+        colors_emp = ['tab:green' if x >= 0 else 'tab:red' for x in employees_12m_sampled.values]
+        ax3_twin.bar(employees_12m_sampled.index, employees_12m_sampled.values / 1000,
+                     width=60, color=colors_emp, alpha=0.5, label='12M Change (thousands)')
+
+    ax3.set_title("Total Employees (5 IT Companies)", fontsize=12, fontweight='bold')
+    ax3.set_ylabel("Total Employees (thousands)", color='tab:blue')
+    ax3_twin.set_ylabel("12M Change (thousands)", color='gray')
+    ax3.tick_params(axis='y', labelcolor='tab:blue')
+    ax3.grid(True, alpha=0.3)
+    ax3.xaxis.set_major_locator(mdates.YearLocator())
+    ax3.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    plt.setp(ax3.get_xticklabels(), rotation=45, ha='right')
+
+    lines1, labels1 = ax3.get_legend_handles_labels()
+    lines2, labels2 = ax3_twin.get_legend_handles_labels()
+    ax3.legend(lines1 + lines2, labels1 + labels2, loc='upper left', fontsize=9)
+
+    # Add latest value
+    if not employees_total.empty:
+        last_emp_date = employees_total.index[-1]
+        last_emp_val = employees_total.iloc[-1]
+        ax3.annotate(f"{last_emp_val/1000:.0f}k", xy=(last_emp_date, last_emp_val/1000),
+                     xytext=(5, 0), textcoords='offset points', fontsize=9, color='tab:blue',
+                     bbox=dict(facecolor='white', edgecolor='tab:blue', alpha=0.8, boxstyle='round,pad=0.2'))
+
+    # === Subplot 4: Margins (separate axes) ===
+    ax4_twin = ax4.twinx()
+
+    if not gross_margin_avg.empty:
+        ax4.plot(gross_margin_avg.index, gross_margin_avg.values, color='tab:blue', linewidth=2,
+                 label='Avg Gross Margin %', marker='o', markersize=3)
+    if not profit_margin_avg.empty:
+        ax4_twin.plot(profit_margin_avg.index, profit_margin_avg.values, color='tab:green', linewidth=2,
+                      label='Avg Profit Margin %', marker='s', markersize=3)
+
+    ax4.set_title("Average Gross Margin & Profit Margin", fontsize=12, fontweight='bold')
+    ax4.set_ylabel("Gross Margin %", color='tab:blue')
+    ax4_twin.set_ylabel("Profit Margin %", color='tab:green')
+    ax4.tick_params(axis='y', labelcolor='tab:blue')
+    ax4_twin.tick_params(axis='y', labelcolor='tab:green')
+    ax4.grid(True, alpha=0.3)
+    ax4.xaxis.set_major_locator(mdates.YearLocator())
+    ax4.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    plt.setp(ax4.get_xticklabels(), rotation=45, ha='right')
+
+    # Combined legend
+    lines1, labels1 = ax4.get_legend_handles_labels()
+    lines2, labels2 = ax4_twin.get_legend_handles_labels()
+    ax4.legend(lines1 + lines2, labels1 + labels2, loc='upper left', fontsize=9)
+
+    # Add latest values
+    if not gross_margin_avg.empty:
+        last_gm_date = gross_margin_avg.index[-1]
+        last_gm_val = gross_margin_avg.iloc[-1]
+        ax4.annotate(f"{last_gm_val:.1f}%", xy=(last_gm_date, last_gm_val),
+                     xytext=(5, 5), textcoords='offset points', fontsize=9, color='tab:blue',
+                     bbox=dict(facecolor='white', edgecolor='tab:blue', alpha=0.8, boxstyle='round,pad=0.2'))
+    if not profit_margin_avg.empty:
+        last_pm_date = profit_margin_avg.index[-1]
+        last_pm_val = profit_margin_avg.iloc[-1]
+        ax4_twin.annotate(f"{last_pm_val:.1f}%", xy=(last_pm_date, last_pm_val),
+                          xytext=(5, -10), textcoords='offset points', fontsize=9, color='tab:green',
+                          bbox=dict(facecolor='white', edgecolor='tab:green', alpha=0.8, boxstyle='round,pad=0.2'))
+
+    # Add overall title and last data annotation
+    fig.suptitle("India IT Services Companies Analysis\n(TCS, Wipro, HCL Tech, Infosys, Cognizant)",
+                 fontsize=14, fontweight='bold', y=0.995)
+
+    # Find latest data date across all series
+    all_dates = []
+    for s in [revenue_growth_avg, services_export_yoy, it_index, employees_total, gross_margin_avg, profit_margin_avg]:
+        if not s.empty:
+            all_dates.append(s.index[-1])
+    if all_dates:
+        last_data_date = max(all_dates)
+        fig.text(0.98, 0.99, f"Last data: {last_data_date.strftime('%d %b %Y')}", transform=fig.transFigure,
+                 fontsize=10, ha='right', va='top',
+                 bbox=dict(facecolor='white', edgecolor='gray', alpha=0.9, boxstyle='round,pad=0.3'))
+
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    plt.savefig(INDIA_IT_OUTFILE, dpi=150, bbox_inches='tight')
+    print(f"Saved India IT Services chart to: {INDIA_IT_OUTFILE}")
+    plt.close()
+
+    print("India IT Services chart generated successfully.")
+
+except Exception as e:
+    print(f"Error generating India IT Services chart: {e}")
+    import traceback
+    traceback.print_exc()
