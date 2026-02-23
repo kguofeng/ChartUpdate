@@ -1407,6 +1407,71 @@ plt.tight_layout()
 plt.savefig(Path(G_CHART_DIR, "Gold vs THB High Frequency Correlation.png"), bbox_inches='tight')
 del ref_ticker, gold_tkr, thb_tkr, dxy_tkr, gold_min, dxy_min, thb_min, px_min_3, px_block, ret_blk, roll_corr, roll_pcorr_usd, roll_beta
 
+# ## Rolling 5d 4hourly correlation (XAUUSD vs ES1)
+lookback_days   = 120
+ref_ticker      = 'ES1 Index'         # use ES session as reference (23h)
+gold_tkr        = 'XAUUSD Curncy'
+es_tkr          = 'ES1 Index'
+dxy_tkr         = 'BBDXY Index'
+block_minutes   = 240                 # sample every N minutes (last tick in each block)
+ROLL_WIN_BLOCKS = 30                  # rolling window in "blocks" (e.g., ~10 ref-days if 6 blocks/day)
+STANDARDIZE_BETA = False              # if True, beta reduces to correlation (both z-scored)
+
+gold_min = pull_intraday_minutes_last_n_days(gold_tkr, lookback_days, ref=ref_ticker)
+es_min   = pull_intraday_minutes_last_n_days(es_tkr, lookback_days, ref=ref_ticker)
+dxy_min  = pull_intraday_minutes_last_n_days(dxy_tkr, lookback_days, ref=ref_ticker)
+
+# 2) Align gold & ES1 on minute grid with short ffill, then add BBDXY the same way
+px_min_2 = align_minutes(gold_min, es_min, method='ffill')
+
+### Align with DXY
+px_min_3 = (
+    px_min_2
+    .join(dxy_min.reindex(px_min_2.index), how='left')
+    .ffill(limit=3)
+    .dropna())
+px_min_3.columns = [gold_tkr, es_tkr, dxy_tkr]
+px_block = last_every_n_minutes(px_min_3, block_minutes)
+ret_blk = np.log(px_block).diff().dropna()
+ren = {gold_tkr: 'XAUUSD', es_tkr: 'ES1', dxy_tkr: 'DXY'}
+ret_blk = ret_blk.rename(columns=ren)
+roll_corr = rolling_corr(ret_blk['XAUUSD'], ret_blk['ES1'], ROLL_WIN_BLOCKS)
+roll_pcorr_usd  = rolling_partial_corr_xyz(ret_blk, 'XAUUSD', 'ES1', 'DXY', ROLL_WIN_BLOCKS)
+roll_beta       = rolling_beta(ret_blk, xcol='XAUUSD', ycol='ES1',
+                               window=ROLL_WIN_BLOCKS, standardize=STANDARDIZE_BETA)
+last_ts = _last_plotted_timestamp(roll_corr, roll_pcorr_usd, roll_beta)
+last_sgt = last_ts.tz_convert('Asia/Singapore').strftime('%Y-%m-%d %H:%M %Z') if last_ts is not None else 'n/a'
+last_updated_text = f"Last Updated:{last_sgt} SGT"
+fig, axes = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
+axes[0].plot(roll_corr.index, roll_corr.values, label=f'Rolling corr')
+axes[0].axhline(0, lw=1)
+axes[0].set_title(f'5-day Rolling Corr (4H data): {gold_tkr} vs {es_tkr}')
+axes[0].legend(loc='upper right')
+axes[0].grid(True, alpha=0.3)
+axes[1].plot(roll_pcorr_usd.index, roll_pcorr_usd.values,
+             label=f'USD-neutral partial corr', color = 'orange')
+axes[1].axhline(0, lw=1)
+axes[1].set_title('DXY-adjusted rolling partial correlation')
+axes[1].legend(loc='upper right')
+axes[1].grid(True, alpha=0.3)
+beta_label = ('Rolling beta (ES1 on XAUUSD)'
+              if not STANDARDIZE_BETA else
+              'Rolling beta (standardized)')
+axes[2].plot(roll_beta.index, roll_beta.values, label=f'{beta_label}', color = 'green')
+axes[2].axhline(0, lw=1)
+axes[2].set_title(beta_label)
+axes[2].legend(loc='upper right')
+axes[2].grid(True, alpha=0.3)
+axes[-1].xaxis.set_major_locator(WeekdayLocator(byweekday=MO, interval=1))
+axes[-1].xaxis.set_major_formatter(DateFormatter('%b %d'))
+fig.text(
+    0.99, 0.98, last_updated_text,
+    ha='right', va='top',
+    bbox=dict(boxstyle='round', facecolor='white', edgecolor='0.5', alpha=0.85),
+    fontsize=9)
+plt.tight_layout()
+plt.savefig(Path(G_CHART_DIR, "Gold vs ES1 High Frequency Correlation.png"), bbox_inches='tight')
+del ref_ticker, gold_tkr, es_tkr, dxy_tkr, gold_min, dxy_min, es_min, px_min_3, px_block, ret_blk, roll_corr, roll_pcorr_usd, roll_beta
 
 
 # ## Rolling 5d 4hourly correlation (HSCEI Futs vs CGB Futs)
