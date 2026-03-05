@@ -31,7 +31,7 @@ def get_econ():
     elements_to_remove = ['Code', 'Country', 'Type', '1y1y swap rate']
     updated_list = [x for x in original_list if x not in elements_to_remove]
 
-    econ_ticker = econ_ticker_df[updated_list].applymap(lambda x: x).values.flatten().tolist()
+    econ_ticker = econ_ticker_df[updated_list].values.flatten().tolist()
 
     data = blp.bdp(econ_ticker, "PX_LAST")
     data['Country'] = data.index.str[4:6]

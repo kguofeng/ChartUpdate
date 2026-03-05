@@ -8,7 +8,7 @@ G_CHART_DIR = r"O:\Tian\Portal\Charts\ChartDataBase"
 
 def clean_data(df):
     front, last = df.iloc[:-1, :], df.iloc[-1:, :]
-    front = front.fillna(method="ffill", limit=1)  # not fill NA for the last row -> it's pending release
+    front = front.ffill(limit=1)  # not fill NA for the last row -> it's pending release
     front = front.dropna()
     return pd.concat([front, last], axis=0)
 
@@ -153,7 +153,7 @@ def calculate_and_plot(data, title, filename, method='yield', multiply_by_100=Fa
 
 def base_series_to_date(df, column_name, base_date=""):
     if base_date not in df.index:
-        base_date = df.index[df.index.get_loc(base_date, method='nearest')]
+        base_date = df.index[df.index.get_indexer([base_date], method='nearest')[0]]
     base_value = df.loc[base_date, column_name]
     df[f'{column_name} (Indexed)'] = df[column_name] / base_value  * 100
     return df

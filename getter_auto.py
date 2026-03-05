@@ -3,43 +3,12 @@ from datetime import datetime
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import statsmodels.api as sm
 
 import bbgui
 from chart_utils import *
 from exante_utils import *
 
-# --- BEGIN fallback for x13_arima_analysis ---------------------------------
-import statsmodels.api as sm
-from statsmodels.tsa.seasonal import seasonal_decompose
-
-def _x13_fallback(series, x12path=None, prefer_x13=True, tempdir=None, print_stdout=False):
-    """
-    Drop-in replacement for sm.tsa.x13_arima_analysis that uses
-    seasonal_decompose under the hood and returns the same attributes.
-    """
-    # determine period (default to 12 if freq not present)
-    freq = getattr(series.index, "freq", None)
-    period = getattr(getattr(freq, 'n', None), '__int__', lambda: 12)()
-
-    dec = seasonal_decompose(series, model="additive", period=period)
-
-    class Result:
-        pass
-
-    res = Result()
-    res.seasadj  = dec.observed - dec.seasonal
-    res.trend    = dec.trend
-    res.seasonal = dec.seasonal
-    res.resid    = dec.resid
-    # downstream code often expects .out and .err attributes
-    res.out = ""
-    res.err = ""
-    return res
-
-# override the real function
-sm.tsa.x13_arima_analysis = _x13_fallback
-# -----------------------------------------------------------------------------
+from x13_utils import x13_arima_analysis as _x13_arima_analysis
 
 def get_auto():
     G_START_DATE = datetime.strptime("01/01/2000", "%d/%m/%Y")  # general start date
@@ -54,25 +23,25 @@ def get_auto():
     # load data
     data = bbgui.bdh(auto_ticker, "PX_LAST", G_START_DATE, G_END_DATE)
     sa_data = pd.DataFrame(index=data.index)
-    x13_path = r'O:/Tian/Portal/Charts/ChartUpdate/WinX13/x13as'
+    x13_path = None  # auto-detected by x13_utils
 
     # Perform seasonal adjustment using X-13-ARIMA-SEATS
     for col in data:
         print(f"seasonally adjusting {col}")  # todo modify china cny seasonal for auto sales,add 1st three month tgt
         s = data[col].dropna()
         if s.index.freq is None:
-            s = s.asfreq('M')
+            s = s.asfreq('ME')
         if s.isna().sum() > 3:
             print(f"-------{col} has more than 3 consecutive NA------")
         s = s.ffill(limit=3)  # todo change ffill to kalman fitler fill?
-        results = sm.tsa.x13_arima_analysis(s, x12path=x13_path, tempdir=r'Temp',
-                                            print_stdout=True)
+        results = _x13_arima_analysis(s, x12path=x13_path, tempdir=r'Temp',
+                                      print_stdout=True)
 
 
         sa_data[col] = results.seasadj
 
-    data_YoY = sa_data.pct_change(12, fill_method=None)
-    data_YoY3mma = sa_data.pct_change(12, fill_method=None).rolling(3).mean()
+    data_YoY = sa_data.pct_change(12)
+    data_YoY3mma = sa_data.pct_change(12).rolling(3).mean()
 
     auto_chart_dict = {}
     for col in data.columns:

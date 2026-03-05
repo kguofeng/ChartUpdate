@@ -3,8 +3,8 @@ from pathlib import Path
 import time
 import shutil
 import matplotlib.pyplot as plt
-import statsmodels.api as sm
 import pandas as pd
+from x13_utils import x13_arima_analysis as _x13_arima_analysis
 from chart_utils import *
 from ecom_utils import *
 
@@ -20,7 +20,7 @@ def get_cement(source):
         data.index.name = "Date"
         data.rename(columns=translate_dict, inplace=True)
         sa_data = pd.DataFrame(index=data.index)
-        x13_path = r'O:/Tian/Portal/Charts/ChartUpdate/WinX13/x13as'
+        x13_path = None  # auto-detected by x13_utils
 
         cement_df = pd.DataFrame(data.columns.T, index=range(len(data.columns)), columns=['Country'])
 
@@ -36,9 +36,9 @@ def get_cement(source):
 
             if s.isna().sum() > 3:
                 print(f"-------{col} has more than 3 consecutive NA------")
-            s = s.fillna(method="ffill", limit=3)  # todo change ffill to kalman fitler fill?
-            results = sm.tsa.x13_arima_analysis(s, x12path=x13_path, tempdir=r'Temp',
-                                                print_stdout=True)
+            s = s.ffill(limit=3)  # todo change ffill to kalman fitler fill?
+            results = _x13_arima_analysis(s, x12path=x13_path, tempdir=r'Temp',
+                                          print_stdout=True)
             sa_data[col] = results.seasadj
 
         #sa_data = data.copy()
@@ -58,8 +58,8 @@ def get_cement(source):
     else:
         raise NotImplementedError("Unrecognized source")
 
-    data_YoY = sa_data.pct_change(12, fill_method=None)
-    data_YoY3mma = sa_data.pct_change(12, fill_method=None).rolling(3).mean()
+    data_YoY = sa_data.pct_change(12)
+    data_YoY3mma = sa_data.pct_change(12).rolling(3).mean()
 
     chart_dict = {}
     for col in data.columns:

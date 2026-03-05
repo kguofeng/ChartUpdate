@@ -27,11 +27,11 @@ def set_freq(s, China):
     s = s.dropna()
     if s.index.freq is None:
         infer_freq = pd.infer_freq(s.index)
-        if infer_freq == 'M':
-            s = s.asfreq('M')
+        if infer_freq in ('M', 'ME'):
+            s = s.asfreq('ME')
         elif infer_freq == 'MS':
             s = s.asfreq('MS')
         else:
             print(f"-------{s.name} has unrecognized inferred frequency {infer_freq}------")
-            s = s.asfreq('M')
+            s = s.asfreq('ME')
     return s
