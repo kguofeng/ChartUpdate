@@ -9063,7 +9063,8 @@ CHART_REGISTRY = OrderedDict([
 ])
 
 CHART_GROUPS = {
-    "updater1": [
+    # --- Charts that pull daily / monthly / quarterly Bloomberg data (blp.bdh, bbgui.bdh) ---
+    "daily_bbg": [
         "20d Change of GSUSFCI", "HSI vs Hibor3y", "EURUSD vs UST", "LMCI", "PMI",
         "LEI", "CapacityUti", "USCPIvsWage", "EZWage", "Withheld Tax vs Total NFP",
         "USD AD Line", "EMDM PBratio", "EM MSCI PEratio", "CMBS Spread over HYG",
@@ -9073,9 +9074,7 @@ CHART_GROUPS = {
         "China Cement, Glass, Auto Sales YoY", "Loans to Non-bank Financial Institutions",
         "Australia Monthly CPI", "Indonesia Wages Per day", "Singapore Domestic Liquidity",
         "Breadth of USD Strength", "Equity BearBull Breadth",
-        "Commod Px vs Commod Country Credit Impulse", "Domestic vs External bond Yield",
-    ],
-    "updater2": [
+        "Domestic vs External bond Yield",
         "Mani PMI and Core PCE", "Labor Quality and Wages",
         "Australia Total Compensation, WPi and Hours Worked",
         "Australia Unemployment Expectations", "US ISM PMI",
@@ -9089,8 +9088,6 @@ CHART_GROUPS = {
         "10y ACM vs 5s10s30s UST Correlation vs ACM Correlation",
         "Orders Inventory Change vs IP", "Employment Cost Index vs NFIB Labour Quality",
         "USTs vs Uncertainty Index",
-    ],
-    "updater3": [
         "Marginal Propensity To Save", "NFP vs CEO Confidence and Operating Profits",
         "Inventory To Shipment Ratios", "Service Activity",
         "US Money Velocity vs Core CPI", "China Railway Freight Traffic Turnover",
@@ -9104,8 +9101,6 @@ CHART_GROUPS = {
         "GSCycVsDef BarCapUSHYsprd JPEMBIsprd",
         "MSCI India EM Relative vs CopperBrentRatio",
         "SensexYoY vs GDPminus10Y",
-    ],
-    "updater4": [
         "ETF Flow Divergence", "OER vs CaseShiller 20-City Adv 18m",
         "OPEC vs Non-OPEC Oil Production YoY", "BIS Non-Financial Debt Service Ratios",
         "China Commodity Prices & Composite Indicator",
@@ -9114,27 +9109,38 @@ CHART_GROUPS = {
         "Indonesia BI Outstanding OMO Monitor",
         "Westpac Asia Positive Surprise vs Asia Equities",
         "Philippines BSP Liquidity", "India CCIL Net Activity & Volumes",
-        "Gold vs THB High Frequency Correlation",
-        "HSCEIvCGB30Y HF Correlation", "HSCEIvCGB30Y HF Correlation (2)",
-        "USDCNH vs AUDUSD HF Correlation",
-        "XAUUSD vs ES KM AUD Intraday Correlation",
-    ],
-    "updater5": [
         "DM/Asia Rates Beta", "US Inventories Tracker", "DXY Rolling Attribution",
         "Gold ETF Fund Flows", "VND Spot vs SBV Interbank Rate Band",
         "Indonesia IDR DNDF Expiry Schedule", "India Banking Seasonality",
         "INR Basis vs Reserves and Banking Liquidity",
-        "DWP Universal Claimants vs UK Inactive Long-Term Sick",
-        "Indonesia Money Supply YoY", "USDVND T123 vs FTSE Fix",
-        "MAS DLI Charts", "Korea MMF Total AUM", "India IT Services Companies",
-        "Asia FX vs Oil Intraday Beta", "G10 FX vs Oil Intraday Beta",
-        "Equities vs Oil Intraday Beta",
-    ],
-    "updater6": [
+        "USDVND T123 vs FTSE Fix",
+        "India IT Services Companies",
         "India Rates vs Equity Valuations",
         "NASDAQ Divergence",
         "China Domestic Credit Impulse",
         "Country IP vs EM Stock Prices",
+    ],
+    # --- Charts that use intraday Bloomberg data (blp.bdib) ---
+    "intraday_bbg": [
+        "Gold vs THB High Frequency Correlation",
+        "HSCEIvCGB30Y HF Correlation",
+        "HSCEIvCGB30Y HF Correlation (2)",
+        "USDCNH vs AUDUSD HF Correlation",
+        "XAUUSD vs ES KM AUD Intraday Correlation",
+        "Asia FX vs Oil Intraday Beta",
+        "G10 FX vs Oil Intraday Beta",
+        "Equities vs Oil Intraday Beta",
+    ],
+    # --- Charts that use web scraping, HTTP APIs, or external data downloads ---
+    "web_scraping": [
+        "DWP Universal Claimants vs UK Inactive Long-Term Sick",  # UK DWP Stat-Xplore API
+        "Korea MMF Total AUM",                                    # Selenium (crawl_mmf_aum)
+        "Indonesia Money Supply YoY",                             # download_bi_monetary_data
+        "Commod Px vs Commod Country Credit Impulse",             # Exante API
+    ],
+    # --- Charts that use CSV files or other non-Bloomberg / non-web sources ---
+    "other": [
+        "MAS DLI Charts",  # loads mas_dli_from_excel.csv + Bloomberg
     ],
 }
 
@@ -9148,14 +9154,16 @@ def main():
         description="Run chart updater — consolidated from 5 original scripts.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
-  python charts_updater_all.py                     # Run ALL charts
-  python charts_updater_all.py "LMCI" "PMI"        # Run charts matching names
-  python charts_updater_all.py --group updater3     # Run charts from updater3
-  python charts_updater_all.py --list               # List all chart names
+  python charts_updater_all.py                          # Run ALL charts
+  python charts_updater_all.py "LMCI" "PMI"             # Run charts matching names
+  python charts_updater_all.py --group daily_bbg         # Run daily Bloomberg charts
+  python charts_updater_all.py --group intraday_bbg      # Run intraday Bloomberg charts
+  python charts_updater_all.py --group web_scraping      # Run web-scraping charts
+  python charts_updater_all.py --list                    # List all chart names
 """)
     parser.add_argument('charts', nargs='*', help='Chart names (substring match)')
     parser.add_argument('--group', '-g', choices=list(CHART_GROUPS.keys()),
-                        help='Run only charts from a specific original updater file')
+                        help='Run only charts from a specific group (daily_bbg, intraday_bbg, web_scraping, other)')
     parser.add_argument('--list', '-l', action='store_true',
                         help='List all available chart names and exit')
     args = parser.parse_args()
