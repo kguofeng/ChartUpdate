@@ -8759,6 +8759,18 @@ def chart_nasdaq_divergence():
         if xlim_start is not None:
             ax_row.set_xlim(left=xlim_start, right=END_DATE)
             ax_row.xaxis.set_major_locator(mdates.YearLocator(1))
+            # rescale y-axes to fit only the visible 10-year window
+            ndx_window = ndx.loc[ndx.index >= xlim_start].dropna()
+            dd_window = (-valid_dd.loc[valid_dd.index >= xlim_start]).dropna()
+            if not ndx_window.empty:
+                y_min, y_max = ndx_window.min(), ndx_window.max()
+                margin = 0.05
+                ax_row.set_ylim(y_min * (1 - margin), y_max * (1 + margin))
+            if not dd_window.empty:
+                dd_min, dd_max = dd_window.min(), dd_window.max()
+                dd_margin = (dd_max - dd_min) * 0.1 if dd_max > dd_min else 1
+                ax_r.set_ylim(dd_min - dd_margin, dd_max + dd_margin)
+                ax_r.invert_yaxis()  # re-apply after set_ylim
         else:
             ax_row.xaxis.set_major_locator(mdates.YearLocator(2))
         ax_row.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
@@ -8904,8 +8916,9 @@ def chart_country_ip_vs_em_stock_prices():
     # compute YoY % change in equity index
     eq_yoy = eq_m.pct_change(12) * 100  # 12-month % change
 
-    # show only last 10 years
+    # show only last 10 years; extend x-axis 6m into future for advanced IP
     ten_yr_start = END_DATE - relativedelta(years=10)
+    x_end = END_DATE + relativedelta(months=6)
 
     # --- Plot 3x3 grid ---
     fig, axs = plt.subplots(3, 3, figsize=(20, 16))
@@ -8938,7 +8951,7 @@ def chart_country_ip_vs_em_stock_prices():
             ax2.set_ylabel('Equity YoY %', color='#ff7f0e', fontsize=9)
             ax2.tick_params(axis='y', labelcolor='#ff7f0e', labelsize=8)
 
-        ax.set_xlim(left=ten_yr_start, right=END_DATE)
+        ax.set_xlim(left=ten_yr_start, right=x_end)
         ax.set_title(cname, fontsize=11, fontweight='bold')
         ax.xaxis.set_major_locator(mdates.YearLocator(2))
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
