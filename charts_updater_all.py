@@ -8644,8 +8644,9 @@ def chart_india_rates_vs_equity_valuations():
     px_m = px_data["Px"].resample("M").last().ffill()
 
     # --- Series 1: Equity/Bond multiple ratio ---
-    # Bond PE = 100 / yield; ratio = NTM PE / Bond PE = NTM PE * yield / 100
-    equity_bond_ratio = pe_m * yld_m / 100.0
+    # Equity PE / Bond PE, where Bond PE = 100 / yield
+    bond_pe = 100.0 / yld_m
+    equity_bond_ratio = pe_m / bond_pe
 
     # --- Series 2: 2-year forward CAGR (lagged 2yr) ---
     # For each date t, fwd_cagr(t) = (Px[t+24m] / Px[t])^0.5 - 1
@@ -8665,8 +8666,8 @@ def chart_india_rates_vs_equity_valuations():
     fig, ax = plt.subplots(figsize=(14, 7))
     valid_ratio = equity_bond_ratio.dropna()
     line1, = ax.plot(valid_ratio.index, valid_ratio.values, color='#1f77b4',
-                     linewidth=1.8, label='Equity/Bond Multiple (NTM PE × 10Y Yield / 100)')
-    ax.set_ylabel('Equity / Bond Multiple Ratio', color='#1f77b4', fontsize=12)
+                     linewidth=1.8, label='Equity PE / Bond PE')
+    ax.set_ylabel('Equity PE / Bond PE', color='#1f77b4', fontsize=12)
     ax.tick_params(axis='y', labelcolor='#1f77b4')
     ax.xaxis.set_major_locator(mdates.YearLocator(2))
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
@@ -8730,32 +8731,47 @@ def chart_nasdaq_divergence():
     drawdown = (member_px / rolling_max - 1) * 100  # in %
     avg_drawdown = drawdown.mean(axis=1)  # average across stocks
 
-    # --- 5) Plot ---
-    fig, ax = plt.subplots(figsize=(14, 7))
-    line1, = ax.plot(ndx.index, ndx.values, color='#1f77b4', linewidth=1.5,
-                     label='NASDAQ 100 Index (log scale)')
-    ax.set_yscale('log')
-    ax.set_ylabel('NASDAQ 100 (log scale)', color='#1f77b4', fontsize=12)
-    ax.tick_params(axis='y', labelcolor='#1f77b4')
-    ax.xaxis.set_major_locator(mdates.YearLocator(2))
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
-
-    ax2 = ax.twinx()
-    valid_dd = avg_drawdown.dropna()
-    line2, = ax2.plot(valid_dd.index, valid_dd.values, color='red', linewidth=1.2,
-                      alpha=0.8, label='Avg 52-Wk Drawdown of NDX Stocks (%)')
-    ax2.set_ylabel('Avg 52-Wk Drawdown (%, inverted)', color='red', fontsize=12)
-    ax2.tick_params(axis='y', labelcolor='red')
-    ax2.invert_yaxis()  # 0 at top, most negative at bottom
-
+    # --- 5) Plot: top = full history, bottom = last 10 years ---
     last_dt = ndx.dropna().index[-1].strftime('%b %Y')
-    ax.set_title(f'NASDAQ 100 Divergence: Index Level vs Avg Constituent Drawdown  (as of {last_dt})',
-                 fontsize=13)
-    lines = [line1, line2]
-    labels = [l.get_label() for l in lines]
-    ax.legend(lines, labels, loc='upper left', fontsize=9)
-    ax.grid(True, ls=':', alpha=0.4)
-    plt.xticks(rotation=45)
+    valid_dd = avg_drawdown.dropna()
+    ten_yr_start = END_DATE - relativedelta(years=10)
+
+    fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(14, 12))
+
+    for ax_row, xlim_start, subtitle in [
+        (ax_top, None, 'Full History'),
+        (ax_bot, ten_yr_start, 'Last 10 Years'),
+    ]:
+        line1, = ax_row.plot(ndx.index, ndx.values, color='#1f77b4', linewidth=1.5,
+                             label='NASDAQ 100 Index (log scale)')
+        ax_row.set_yscale('log')
+        ax_row.set_ylabel('NASDAQ 100 (log scale)', color='#1f77b4', fontsize=11)
+        ax_row.tick_params(axis='y', labelcolor='#1f77b4')
+
+        ax_r = ax_row.twinx()
+        # Flip sign so drawdown values are positive (0% = no drawdown, higher = deeper)
+        line2, = ax_r.plot(valid_dd.index, -valid_dd.values, color='red', linewidth=1.2,
+                           alpha=0.8, label='Avg 52-Wk Drawdown of NDX Stocks (%, flipped)')
+        ax_r.set_ylabel('Avg 52-Wk Drawdown (%, flipped)', color='red', fontsize=11)
+        ax_r.tick_params(axis='y', labelcolor='red')
+        ax_r.invert_yaxis()  # 0 at top, largest drawdown at bottom
+
+        if xlim_start is not None:
+            ax_row.set_xlim(left=xlim_start, right=END_DATE)
+            ax_row.xaxis.set_major_locator(mdates.YearLocator(1))
+        else:
+            ax_row.xaxis.set_major_locator(mdates.YearLocator(2))
+        ax_row.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+
+        ax_row.set_title(f'{subtitle}', fontsize=11)
+        lines = [line1, line2]
+        labels = [l.get_label() for l in lines]
+        ax_row.legend(lines, labels, loc='upper left', fontsize=8)
+        ax_row.grid(True, ls=':', alpha=0.4)
+        ax_row.tick_params(axis='x', rotation=45)
+
+    fig.suptitle(f'NASDAQ 100 Divergence: Index Level vs Avg Constituent Drawdown  (as of {last_dt})',
+                 fontsize=13, y=1.01)
     plt.tight_layout()
     plt.savefig(Path(G_CHART_DIR, "NASDAQ_Divergence.png"),
                 dpi=150, bbox_inches='tight')
@@ -8847,9 +8863,10 @@ def chart_china_domestic_credit_impulse():
 
 
 def chart_country_ip_vs_em_stock_prices():
-    """Country Industrial Production YoY (advanced 6m) vs local-ccy equity index.
+    """Country Industrial Production YoY (advanced 6m) vs equity index YoY % change.
 
     9 countries: China, India, Taiwan, Korea, Japan, Brazil, Indonesia, Thailand, Vietnam.
+    Shows last 10 years of data.
     """
     END_DATE = datetime.today()
     START_DATE = datetime(2000, 1, 1)
@@ -8884,6 +8901,12 @@ def chart_country_ip_vs_em_stock_prices():
     ip_m = ip_data.resample('M').last().ffill()
     eq_m = eq_data.resample('M').last().ffill()
 
+    # compute YoY % change in equity index
+    eq_yoy = eq_m.pct_change(12) * 100  # 12-month % change
+
+    # show only last 10 years
+    ten_yr_start = END_DATE - relativedelta(years=10)
+
     # --- Plot 3x3 grid ---
     fig, axs = plt.subplots(3, 3, figsize=(20, 16))
     axs = axs.flatten()
@@ -8894,12 +8917,13 @@ def chart_country_ip_vs_em_stock_prices():
         eq_ticker = tickers['eq']
 
         ip_series = ip_m[ip_ticker].dropna() if ip_ticker in ip_m.columns else pd.Series(dtype=float)
-        eq_series = eq_m[eq_ticker].dropna() if eq_ticker in eq_m.columns else pd.Series(dtype=float)
+        eq_series = eq_yoy[eq_ticker].dropna() if eq_ticker in eq_yoy.columns else pd.Series(dtype=float)
 
         # advance IP by 6 months
         if not ip_series.empty:
             ip_advanced = ip_series.copy()
             ip_advanced.index = ip_advanced.index + pd.DateOffset(months=6)
+            ip_advanced = ip_advanced.loc[ip_advanced.index >= ten_yr_start]
             line1, = ax.plot(ip_advanced.index, ip_advanced.values, color='steelblue',
                              linewidth=1.5, label=f'IP YoY % (adv 6m)')
             ax.set_ylabel('IP YoY %', color='steelblue', fontsize=9)
@@ -8907,13 +8931,16 @@ def chart_country_ip_vs_em_stock_prices():
 
         ax2 = ax.twinx()
         if not eq_series.empty:
-            line2, = ax2.plot(eq_series.index, eq_series.values, color='#ff7f0e',
-                              linewidth=1.3, alpha=0.85, label=f'{eq_ticker.split()[0]}')
-            ax2.set_ylabel('Equity Index', color='#ff7f0e', fontsize=9)
+            eq_plot = eq_series.loc[eq_series.index >= ten_yr_start]
+            line2, = ax2.plot(eq_plot.index, eq_plot.values, color='#ff7f0e',
+                              linewidth=1.3, alpha=0.85,
+                              label=f'{eq_ticker.split()[0]} YoY %')
+            ax2.set_ylabel('Equity YoY %', color='#ff7f0e', fontsize=9)
             ax2.tick_params(axis='y', labelcolor='#ff7f0e', labelsize=8)
 
+        ax.set_xlim(left=ten_yr_start, right=END_DATE)
         ax.set_title(cname, fontsize=11, fontweight='bold')
-        ax.xaxis.set_major_locator(mdates.YearLocator(4))
+        ax.xaxis.set_major_locator(mdates.YearLocator(2))
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
         ax.tick_params(axis='x', rotation=45, labelsize=8)
         ax.grid(True, ls=':', alpha=0.3)
@@ -8924,7 +8951,7 @@ def chart_country_ip_vs_em_stock_prices():
         ax.legend(h1 + h2, l1 + l2, loc='upper left', fontsize=7)
 
     last_dt = END_DATE.strftime('%b %Y')
-    fig.suptitle(f'Country IP YoY (Advanced 6m) vs Local-Ccy Equity Index  (as of {last_dt})',
+    fig.suptitle(f'Country IP YoY (Advanced 6m) vs Equity Index YoY %  (as of {last_dt})',
                  fontsize=14, y=1.01)
     plt.tight_layout()
     plt.savefig(Path(G_CHART_DIR, "Country_IP_vs_EM_Stock_Prices.png"),
