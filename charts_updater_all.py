@@ -8698,7 +8698,8 @@ def chart_india_rates_vs_equity_valuations():
 def chart_nasdaq_divergence():
     """NASDAQ Divergence: NDX index (log) vs average 52-wk drawdown of NDX stocks (inverted)."""
     END_DATE = datetime.today()
-    START_DATE = datetime(2000, 1, 1)
+    START_DATE = datetime(2006, 1, 1)  # pull from 2006 so 252-day rolling window is ready by 2007
+    PLOT_START = datetime(2007, 1, 1)
 
     # --- 1) Get current NDX members ---
     members_df = blp.bds("NDX Index", "INDX_MWEIGHT")
@@ -8731,15 +8732,17 @@ def chart_nasdaq_divergence():
     drawdown = (member_px / rolling_max - 1) * 100  # in %
     avg_drawdown = drawdown.mean(axis=1)  # average across stocks
 
-    # --- 5) Plot: top = full history, bottom = last 10 years ---
-    last_dt = ndx.dropna().index[-1].strftime('%b %Y')
+    # --- 5) Plot: top = from 2007, bottom = last 10 years ---
+    ndx = ndx.loc[ndx.index >= PLOT_START]
     valid_dd = avg_drawdown.dropna()
+    valid_dd = valid_dd.loc[valid_dd.index >= PLOT_START]
+    last_dt = ndx.dropna().index[-1].strftime('%b %Y')
     ten_yr_start = END_DATE - relativedelta(years=10)
 
     fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(14, 12))
 
     for ax_row, xlim_start, subtitle in [
-        (ax_top, None, 'Full History'),
+        (ax_top, None, 'From 2007'),
         (ax_bot, ten_yr_start, 'Last 10 Years'),
     ]:
         line1, = ax_row.plot(ndx.index, ndx.values, color='#1f77b4', linewidth=1.5,
