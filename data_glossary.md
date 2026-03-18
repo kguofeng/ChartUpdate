@@ -26,6 +26,7 @@ Organized by **Region > Country > Asset Class (Market / Econ)**.
 |--------|-------------|------------|---------------|
 | SPX Index | S&P 500 | Equity Index | Daily, index points |
 | NDQ Index | Nasdaq 100 | Equity Index | Daily, index points |
+| NDX Index | Nasdaq 100 (alt ticker) | Equity Index | Daily, index points |
 | RTY Index | Russell 2000 | Equity Index | Daily, index points |
 | ESA Index | E-mini S&P 500 Futures | Equity Futures | Daily, index points |
 | NQA Index | Nasdaq 100 Futures | Equity Futures | Daily, index points |
@@ -277,6 +278,8 @@ Organized by **Region > Country > Asset Class (Market / Econ)**.
 | JNLSUCTL Index | Japan Wage Data | Wages | Monthly, % YoY |
 | JNCPIYOY Index | Japan CPI YoY | Inflation | Monthly, % YoY |
 | JNISIVR Index | Japan Inventory/Shipment Ratio | Activity | Monthly, ratio |
+| JNIPSYOY Index | Japan Industrial Production YoY | Activity | Monthly, % YoY |
+| JNIPMOM Index | Japan Industrial Production MoM | Activity | Monthly, % MoM |
 
 ### AU -- Market
 
@@ -433,6 +436,31 @@ Organized by **Region > Country > Asset Class (Market / Econ)**.
 | CAQIGUZC Index | Guangzhou Air Quality Index | AQI | Daily, index |
 | CAQISHHC Index | Shanghai Air Quality Index | AQI | Daily, index |
 | CAQISHYC Index | Shenyang Air Quality Index | AQI | Daily, index |
+| CNLNASF Index | TSF Aggregate, monthly flow | Credit | Monthly, CNY bn |
+| CNFGASF Index | TSF Aggregate, YoY change | Credit | Monthly, CNY bn |
+| CNFGASFG Index | TSF Aggregate, YoY growth rate | Credit | Monthly, % YoY |
+| CNLNRMBL Index | TSF — Local Currency Bank Loans | Credit | Monthly, CNY bn |
+| CNLNFORL Index | TSF — Foreign Currency Bank Loans | Credit | Monthly, CNY bn |
+| CNLNENLO Index | TSF — Entrusted Loans | Credit | Monthly, CNY bn |
+| CNLNTRLO Index | TSF — Trust Loans | Credit | Monthly, CNY bn |
+| CNLNUNBA Index | TSF — Undiscounted Bankers Acceptances | Credit | Monthly, CNY bn |
+| CNLNDNFS Index | TSF — Domestic Equity Financing by Non-Financial Corps | Credit | Monthly, CNY bn |
+| CNLNNFCB Index | TSF — Net Financing of Corporate Bonds | Credit | Monthly, CNY bn |
+| CNLNABS Index | TSF — Asset Backed Securities | Credit | Monthly, CNY bn |
+| CNLNLWP Index | TSF — Write-offs of Loans | Credit | Monthly, CNY bn |
+| CNLNGB Index | TSF — Government Bonds | Credit | Monthly, CNY bn |
+| CNLNNEW Index | CNY New Loans, monthly | Credit | Monthly, CNY bn |
+| CNLNCNEW Index | CNY New Loans, cumulative YTD | Credit | Cumulative, CNY bn |
+| CNFGRL Index | TSF — Renminbi Loans component | Credit | Monthly, CNY bn |
+| CNFGEL Index | TSF — Entrusted Loans component | Credit | Monthly, CNY bn |
+| CHBGREVO Index | BBG Economics China Credit Impulse (level) | Credit | Monthly, index |
+| CHBGREVA Index | BBG Economics China Credit Impulse (12m net change) | Credit | Monthly, index |
+| GSXACFIS Index | Goldman Sachs China Fiscal Spending Index | Fiscal | Monthly, index |
+| CHGELBG Index | Local Govt Bond Issuance — new bonds | Fiscal | Monthly, CNY bn |
+| CHGELBD Index | Local Govt Bond Issuance — total | Fiscal | Monthly, CNY bn |
+| CHGELDB Index | Local Govt Debt Balance | Fiscal | Monthly, CNY bn |
+| CNTDFDY Index | Annual Fiscal Deficit Target (% GDP) | Fiscal | Annual, % GDP |
+| CHVAIOY Index | China Value-Added Industrial Output YoY | Activity | Monthly, % YoY |
 
 ### KR -- Market
 
@@ -470,6 +498,7 @@ Organized by **Region > Country > Asset Class (Market / Econ)**.
 | KOPSI Index | Korea Shipment Index | Activity | Monthly, index |
 | KOEGSTOT Index | Korea Quarterly Nominal GDP | GDP | Quarterly, KRW bn |
 | KOECTOTY Index | Korea Real GDP YoY | GDP | Quarterly, % YoY |
+| KOIPIYOY Index | Korea Industrial Production YoY | Activity | Monthly, % YoY |
 
 ### IN -- Market
 
@@ -838,6 +867,7 @@ Examples:
 | GVTL10YR Index | Thailand Govt 10Y Yield | Govt Yield | Daily, yield % |
 | GVTL30YR Index | Thailand Govt 30Y Yield | Govt Yield | Daily, yield % |
 | THCPIYOY Index | Thailand CPI YoY | Inflation | Monthly, % YoY |
+| THMPIN2Y Index | Thailand Manufacturing Production YoY | Activity | Monthly, % YoY |
 
 ### MY -- Market
 
@@ -898,6 +928,7 @@ Examples:
 | TWCPIYOY Index | Taiwan CPI YoY | Inflation | Monthly, % YoY |
 | ECOXTWS Index | Taiwan GDP | GDP | Quarterly, level |
 | TWMERY Index | Taiwan Wage Data | Wages | Monthly, % YoY |
+| TWINDPIY Index | Taiwan Industrial Production YoY | Activity | Monthly, % YoY |
 
 ### ID -- Market
 
@@ -917,6 +948,7 @@ Examples:
 | IDM2YOY Index | Indonesia M2 YoY | Monetary | Monthly, % YoY |
 | IDGRP Index | Indonesia Quarterly Nominal GDP | GDP | Quarterly, IDR bn |
 | IDGDPY Index | Indonesia Real GDP YoY | GDP | Quarterly, % YoY |
+| IDMPIYOY Index | Indonesia Manufacturing Production YoY | Activity | Monthly, % YoY |
 
 ### PH -- Market
 
@@ -938,6 +970,8 @@ Examples:
 | VND T130 Curncy | VND Spot | FX | Daily, FX rate |
 | USDVND Curncy | USD/VND | FX | Daily, FX rate |
 | SBVNUSD Index | VN Central Rate | FX Policy | Daily, FX rate |
+| VNINDEX Index | Vietnam Ho Chi Minh Stock Index | Equity Index | Daily, index points |
+| VIPITYOY Index | Vietnam Industrial Production YoY | Activity | Monthly, % YoY |
 
 ---
 
@@ -1116,6 +1150,7 @@ Examples:
 | GTBRL30YR Corp | Brazil Local 30Y | Govt Yield | Daily, yield % |
 | BZGDGDPQ Index | Brazil Quarterly Nominal GDP | GDP | Quarterly, BRL bn |
 | BZGDYOY% Index | Brazil Real GDP YoY | GDP | Quarterly, % YoY |
+| BZIPYOY% Index | Brazil Industrial Production YoY | Activity | Monthly, % YoY |
 
 ### PE -- Market
 

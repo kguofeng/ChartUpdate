@@ -8607,6 +8607,331 @@ def chart_equities_vs_oil_intraday_beta():
 
 
 
+# --- New charts (updater6) ---
+
+
+def chart_india_rates_vs_equity_valuations():
+    """India Rates Relative to Equity Valuations vs Market Performance.
+
+    Series 1 (left):  Equity-Bond multiple ratio = NTM PE / (100 / 10Y yield)
+    Series 2 (right): 2-year forward CAGR in MSCI India (inverted, lagged 2yr)
+    """
+    END_DATE = datetime.today()
+    START_DATE = datetime(1998, 1, 1)
+
+    # --- pull data ---
+    pe_data = blp.bdh("MXIN Index", "BEST_PE_RATIO", START_DATE, END_DATE)
+    if isinstance(pe_data.columns, pd.MultiIndex):
+        pe_data.columns = pe_data.columns.get_level_values(0)
+    pe_data.index = pd.to_datetime(pe_data.index)
+    pe_data.columns = ["PE"]
+
+    yld_data = blp.bdh("GIND10YR Index", "PX_LAST", START_DATE, END_DATE)
+    if isinstance(yld_data.columns, pd.MultiIndex):
+        yld_data.columns = yld_data.columns.get_level_values(0)
+    yld_data.index = pd.to_datetime(yld_data.index)
+    yld_data.columns = ["Yield"]
+
+    px_data = blp.bdh("MXIN Index", "PX_LAST", START_DATE, END_DATE)
+    if isinstance(px_data.columns, pd.MultiIndex):
+        px_data.columns = px_data.columns.get_level_values(0)
+    px_data.index = pd.to_datetime(px_data.index)
+    px_data.columns = ["Px"]
+
+    # resample to monthly to smooth out noise
+    pe_m = pe_data["PE"].resample("M").last().ffill()
+    yld_m = yld_data["Yield"].resample("M").last().ffill()
+    px_m = px_data["Px"].resample("M").last().ffill()
+
+    # --- Series 1: Equity/Bond multiple ratio ---
+    # Bond PE = 100 / yield; ratio = NTM PE / Bond PE = NTM PE * yield / 100
+    equity_bond_ratio = pe_m * yld_m / 100.0
+
+    # --- Series 2: 2-year forward CAGR (lagged 2yr) ---
+    # For each date t, fwd_cagr(t) = (Px[t+24m] / Px[t])^0.5 - 1
+    fwd_cagr = pd.Series(index=px_m.index, dtype=float)
+    for i, dt in enumerate(px_m.index):
+        future_dt = dt + relativedelta(months=24)
+        # find closest available future date
+        future_vals = px_m.loc[px_m.index >= future_dt]
+        if future_vals.empty:
+            continue
+        future_px = future_vals.iloc[0]
+        current_px = px_m.iloc[i]
+        if current_px > 0 and not np.isnan(future_px):
+            fwd_cagr.iloc[i] = ((future_px / current_px) ** 0.5 - 1) * 100
+
+    # --- plot ---
+    fig, ax = plt.subplots(figsize=(14, 7))
+    valid_ratio = equity_bond_ratio.dropna()
+    line1, = ax.plot(valid_ratio.index, valid_ratio.values, color='#1f77b4',
+                     linewidth=1.8, label='Equity/Bond Multiple (NTM PE × 10Y Yield / 100)')
+    ax.set_ylabel('Equity / Bond Multiple Ratio', color='#1f77b4', fontsize=12)
+    ax.tick_params(axis='y', labelcolor='#1f77b4')
+    ax.xaxis.set_major_locator(mdates.YearLocator(2))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+
+    ax2 = ax.twinx()
+    valid_cagr = fwd_cagr.dropna()
+    line2, = ax2.plot(valid_cagr.index, valid_cagr.values, color='#ff7f0e',
+                      linewidth=1.8, alpha=0.85,
+                      label='2Y Fwd CAGR in MSCI India (%, inv.)')
+    ax2.set_ylabel('2Y Forward CAGR (%, inverted)', color='#ff7f0e', fontsize=12)
+    ax2.tick_params(axis='y', labelcolor='#ff7f0e')
+    ax2.invert_yaxis()
+
+    last_dt = valid_ratio.index[-1].strftime('%b %Y')
+    ax.set_title(f'India: Equity/Bond Multiple vs 2Y Forward MSCI India Returns  (as of {last_dt})',
+                 fontsize=13)
+    lines = [line1, line2]
+    labels = [l.get_label() for l in lines]
+    ax.legend(lines, labels, loc='upper left', fontsize=9)
+    ax.grid(True, ls=':', alpha=0.4)
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig(Path(G_CHART_DIR, "India_Rates_vs_Equity_Valuations.png"),
+                dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+
+def chart_nasdaq_divergence():
+    """NASDAQ Divergence: NDX index (log) vs average 52-wk drawdown of NDX stocks (inverted)."""
+    END_DATE = datetime.today()
+    START_DATE = datetime(2000, 1, 1)
+
+    # --- 1) Get current NDX members ---
+    members_df = blp.bds("NDX Index", "INDX_MWEIGHT")
+    if 'member_ticker_and_exchange_code' in members_df.columns:
+        member_tickers = members_df['member_ticker_and_exchange_code'].tolist()
+    elif members_df.shape[1] >= 1:
+        member_tickers = members_df.iloc[:, 0].tolist()
+    else:
+        raise RuntimeError("Could not parse NDX Index members from Bloomberg")
+
+    # ensure each ticker ends with " Equity"
+    member_tickers = [t if t.strip().endswith('Equity') else t.strip() + ' Equity'
+                      for t in member_tickers]
+
+    # --- 2) Pull NDX index level ---
+    ndx = blp.bdh("NDX Index", "PX_LAST", START_DATE, END_DATE)
+    if isinstance(ndx.columns, pd.MultiIndex):
+        ndx.columns = ndx.columns.get_level_values(0)
+    ndx.index = pd.to_datetime(ndx.index)
+    ndx = ndx.iloc[:, 0]
+
+    # --- 3) Pull all member prices ---
+    member_px = blp.bdh(member_tickers, "PX_LAST", START_DATE, END_DATE)
+    if isinstance(member_px.columns, pd.MultiIndex):
+        member_px.columns = member_px.columns.get_level_values(0)
+    member_px.index = pd.to_datetime(member_px.index)
+
+    # --- 4) Compute average 52-week drawdown ---
+    rolling_max = member_px.rolling(window=252, min_periods=126).max()
+    drawdown = (member_px / rolling_max - 1) * 100  # in %
+    avg_drawdown = drawdown.mean(axis=1)  # average across stocks
+
+    # --- 5) Plot ---
+    fig, ax = plt.subplots(figsize=(14, 7))
+    line1, = ax.plot(ndx.index, ndx.values, color='#1f77b4', linewidth=1.5,
+                     label='NASDAQ 100 Index (log scale)')
+    ax.set_yscale('log')
+    ax.set_ylabel('NASDAQ 100 (log scale)', color='#1f77b4', fontsize=12)
+    ax.tick_params(axis='y', labelcolor='#1f77b4')
+    ax.xaxis.set_major_locator(mdates.YearLocator(2))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+
+    ax2 = ax.twinx()
+    valid_dd = avg_drawdown.dropna()
+    line2, = ax2.plot(valid_dd.index, valid_dd.values, color='red', linewidth=1.2,
+                      alpha=0.8, label='Avg 52-Wk Drawdown of NDX Stocks (%)')
+    ax2.set_ylabel('Avg 52-Wk Drawdown (%, inverted)', color='red', fontsize=12)
+    ax2.tick_params(axis='y', labelcolor='red')
+    ax2.invert_yaxis()  # 0 at top, most negative at bottom
+
+    last_dt = ndx.dropna().index[-1].strftime('%b %Y')
+    ax.set_title(f'NASDAQ 100 Divergence: Index Level vs Avg Constituent Drawdown  (as of {last_dt})',
+                 fontsize=13)
+    lines = [line1, line2]
+    labels = [l.get_label() for l in lines]
+    ax.legend(lines, labels, loc='upper left', fontsize=9)
+    ax.grid(True, ls=':', alpha=0.4)
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig(Path(G_CHART_DIR, "NASDAQ_Divergence.png"),
+                dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+
+def chart_china_domestic_credit_impulse():
+    """China Domestic Credit Impulse.
+
+    Credit impulse  = (TSF - equity issuance) 12m rolling sum, then 12m change
+    Govt spending   = GS China Fiscal Spending Index (12m change)
+    Both expressed as % of nominal GDP.
+    """
+    END_DATE = datetime.today()
+    START_DATE = datetime(2003, 1, 1)
+
+    # --- Pull TSF aggregate and equity issuance (monthly flows, CNY bn) ---
+    tsf_tickers = ["CNLNASF Index", "CNLNDNFS Index"]
+    tsf_raw = blp.bdh(tsf_tickers, "PX_LAST", START_DATE, END_DATE)
+    if isinstance(tsf_raw.columns, pd.MultiIndex):
+        tsf_raw.columns = tsf_raw.columns.get_level_values(0)
+    tsf_raw.index = pd.to_datetime(tsf_raw.index)
+
+    # --- Government fiscal spending index ---
+    fiscal_raw = blp.bdh("GSXACFIS Index", "PX_LAST", START_DATE, END_DATE)
+    if isinstance(fiscal_raw.columns, pd.MultiIndex):
+        fiscal_raw.columns = fiscal_raw.columns.get_level_values(0)
+    fiscal_raw.index = pd.to_datetime(fiscal_raw.index)
+    fiscal = fiscal_raw.iloc[:, 0]
+
+    # --- China quarterly nominal GDP (CNY bn) ---
+    gdp_raw = blp.bdh("CNNGPQ$ Index", "PX_LAST", START_DATE, END_DATE, Per='Q')
+    if isinstance(gdp_raw.columns, pd.MultiIndex):
+        gdp_raw.columns = gdp_raw.columns.get_level_values(0)
+    gdp_raw.index = pd.to_datetime(gdp_raw.index)
+    gdp_q = gdp_raw.iloc[:, 0]
+    # trailing 4-quarter GDP (annualised), resample to monthly
+    gdp_annual = gdp_q.rolling(4).sum()
+    gdp_m = gdp_annual.resample('M').last().ffill()
+
+    # --- Credit impulse ---
+    tsf_flow = tsf_raw["CNLNASF Index"].fillna(0)
+    eq_flow = tsf_raw["CNLNDNFS Index"].fillna(0)
+    adj_tsf_flow = tsf_flow - eq_flow  # monthly flow ex equity issuance
+
+    # 12-month rolling sum → annual credit flow
+    annual_credit_flow = adj_tsf_flow.rolling(12).sum()
+    # 12-month change of annual flow → credit impulse (CNY bn)
+    credit_impulse = annual_credit_flow - annual_credit_flow.shift(12)
+
+    # --- Government spending impulse ---
+    # GSXACFIS is a level index — compute 12m change
+    fiscal_impulse = fiscal - fiscal.shift(12)
+
+    # --- Align dates and express as % of GDP ---
+    combined = pd.DataFrame({
+        'credit_impulse': credit_impulse,
+        'fiscal_impulse': fiscal_impulse,
+        'gdp': gdp_m,
+    }).dropna()
+
+    combined['credit_pct_gdp'] = combined['credit_impulse'] / combined['gdp'] * 100
+    combined['fiscal_pct_gdp'] = combined['fiscal_impulse'] / combined['gdp'] * 100
+    combined['total'] = combined['credit_pct_gdp'] + combined['fiscal_pct_gdp']
+
+    # --- Plot ---
+    fig, ax = plt.subplots(figsize=(14, 7))
+    ax.bar(combined.index, combined['credit_pct_gdp'], width=25, color='steelblue',
+           alpha=0.7, label='Credit Impulse (TSF ex Equity, % GDP)')
+    ax.bar(combined.index, combined['fiscal_pct_gdp'], width=25, bottom=combined['credit_pct_gdp'],
+           color='darkorange', alpha=0.7, label='Govt Spending Impulse (% GDP)')
+    ax.plot(combined.index, combined['total'], color='black', linewidth=1.5,
+            label='Total Impulse (% GDP)')
+    ax.axhline(0, color='grey', linewidth=0.8)
+
+    ax.set_ylabel('% of GDP', fontsize=12)
+    ax.xaxis.set_major_locator(mdates.YearLocator(2))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    last_dt = combined.index[-1].strftime('%b %Y')
+    ax.set_title(f'China Domestic Credit & Fiscal Impulse (% GDP)  (as of {last_dt})',
+                 fontsize=13)
+    ax.legend(loc='upper left', fontsize=9)
+    ax.grid(True, ls=':', alpha=0.4)
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig(Path(G_CHART_DIR, "China_Domestic_Credit_Impulse.png"),
+                dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+
+def chart_country_ip_vs_em_stock_prices():
+    """Country Industrial Production YoY (advanced 6m) vs local-ccy equity index.
+
+    9 countries: China, India, Taiwan, Korea, Japan, Brazil, Indonesia, Thailand, Vietnam.
+    """
+    END_DATE = datetime.today()
+    START_DATE = datetime(2000, 1, 1)
+
+    countries = OrderedDict([
+        ('China',     {'ip': 'CHVAIOY Index',  'eq': 'SHSZ300 Index'}),
+        ('India',     {'ip': 'INPIINDY Index', 'eq': 'NIFTY Index'}),
+        ('Taiwan',    {'ip': 'TWINDPIY Index', 'eq': 'TWSE Index'}),
+        ('Korea',     {'ip': 'KOIPIYOY Index', 'eq': 'KOSPI Index'}),
+        ('Japan',     {'ip': 'JNIPSYOY Index', 'eq': 'TPX Index'}),
+        ('Brazil',    {'ip': 'BZIPYOY% Index', 'eq': 'IBOV Index'}),
+        ('Indonesia', {'ip': 'IDMPIYOY Index', 'eq': 'JCI Index'}),
+        ('Thailand',  {'ip': 'THMPIN2Y Index', 'eq': 'SET Index'}),
+        ('Vietnam',   {'ip': 'VIPITYOY Index', 'eq': 'VNINDEX Index'}),
+    ])
+
+    # pull all tickers in one go
+    all_ip_tickers = [v['ip'] for v in countries.values()]
+    all_eq_tickers = [v['eq'] for v in countries.values()]
+
+    ip_data = blp.bdh(all_ip_tickers, "PX_LAST", START_DATE, END_DATE)
+    if isinstance(ip_data.columns, pd.MultiIndex):
+        ip_data.columns = ip_data.columns.get_level_values(0)
+    ip_data.index = pd.to_datetime(ip_data.index)
+
+    eq_data = blp.bdh(all_eq_tickers, "PX_LAST", START_DATE, END_DATE)
+    if isinstance(eq_data.columns, pd.MultiIndex):
+        eq_data.columns = eq_data.columns.get_level_values(0)
+    eq_data.index = pd.to_datetime(eq_data.index)
+
+    # resample IP to monthly (it's already YoY %)
+    ip_m = ip_data.resample('M').last().ffill()
+    eq_m = eq_data.resample('M').last().ffill()
+
+    # --- Plot 3x3 grid ---
+    fig, axs = plt.subplots(3, 3, figsize=(20, 16))
+    axs = axs.flatten()
+
+    for i, (cname, tickers) in enumerate(countries.items()):
+        ax = axs[i]
+        ip_ticker = tickers['ip']
+        eq_ticker = tickers['eq']
+
+        ip_series = ip_m[ip_ticker].dropna() if ip_ticker in ip_m.columns else pd.Series(dtype=float)
+        eq_series = eq_m[eq_ticker].dropna() if eq_ticker in eq_m.columns else pd.Series(dtype=float)
+
+        # advance IP by 6 months
+        if not ip_series.empty:
+            ip_advanced = ip_series.copy()
+            ip_advanced.index = ip_advanced.index + pd.DateOffset(months=6)
+            line1, = ax.plot(ip_advanced.index, ip_advanced.values, color='steelblue',
+                             linewidth=1.5, label=f'IP YoY % (adv 6m)')
+            ax.set_ylabel('IP YoY %', color='steelblue', fontsize=9)
+            ax.tick_params(axis='y', labelcolor='steelblue', labelsize=8)
+
+        ax2 = ax.twinx()
+        if not eq_series.empty:
+            line2, = ax2.plot(eq_series.index, eq_series.values, color='#ff7f0e',
+                              linewidth=1.3, alpha=0.85, label=f'{eq_ticker.split()[0]}')
+            ax2.set_ylabel('Equity Index', color='#ff7f0e', fontsize=9)
+            ax2.tick_params(axis='y', labelcolor='#ff7f0e', labelsize=8)
+
+        ax.set_title(cname, fontsize=11, fontweight='bold')
+        ax.xaxis.set_major_locator(mdates.YearLocator(4))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+        ax.tick_params(axis='x', rotation=45, labelsize=8)
+        ax.grid(True, ls=':', alpha=0.3)
+
+        # combined legend
+        h1, l1 = ax.get_legend_handles_labels()
+        h2, l2 = ax2.get_legend_handles_labels()
+        ax.legend(h1 + h2, l1 + l2, loc='upper left', fontsize=7)
+
+    last_dt = END_DATE.strftime('%b %Y')
+    fig.suptitle(f'Country IP YoY (Advanced 6m) vs Local-Ccy Equity Index  (as of {last_dt})',
+                 fontsize=14, y=1.01)
+    plt.tight_layout()
+    plt.savefig(Path(G_CHART_DIR, "Country_IP_vs_EM_Stock_Prices.png"),
+                dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+
 # ==============================================================================
 # SECTION 5: CHART REGISTRY
 # ==============================================================================
@@ -8729,6 +9054,12 @@ CHART_REGISTRY = OrderedDict([
     ("Asia FX vs Oil Intraday Beta",                    chart_asia_fx_vs_oil_intraday_beta),
     ("G10 FX vs Oil Intraday Beta",                     chart_g10_fx_vs_oil_intraday_beta),
     ("Equities vs Oil Intraday Beta",                   chart_equities_vs_oil_intraday_beta),
+
+    # --- New charts (updater6) ---
+    ("India Rates vs Equity Valuations",               chart_india_rates_vs_equity_valuations),
+    ("NASDAQ Divergence",                              chart_nasdaq_divergence),
+    ("China Domestic Credit Impulse",                  chart_china_domestic_credit_impulse),
+    ("Country IP vs EM Stock Prices",                  chart_country_ip_vs_em_stock_prices),
 ])
 
 CHART_GROUPS = {
@@ -8798,6 +9129,12 @@ CHART_GROUPS = {
         "MAS DLI Charts", "Korea MMF Total AUM", "India IT Services Companies",
         "Asia FX vs Oil Intraday Beta", "G10 FX vs Oil Intraday Beta",
         "Equities vs Oil Intraday Beta",
+    ],
+    "updater6": [
+        "India Rates vs Equity Valuations",
+        "NASDAQ Divergence",
+        "China Domestic Credit Impulse",
+        "Country IP vs EM Stock Prices",
     ],
 }
 
