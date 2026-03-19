@@ -49,6 +49,7 @@ from chart_utils import clean_data, calculate_and_plot, base_series_to_date
 from exante_utils import get_data as exante_get_data
 from ecom_utils import bfill_cny
 from download_bi_monetary_data import get_adjusted_m0_data, compute_yoy_growth
+from download_komtrax_data import get_komtrax_data, get_komtrax_timeseries, get_komtrax_yoy
 
 # Lazy imports for statsmodels (scipy compatibility issues in Python 3.13)
 try:
@@ -8975,6 +8976,95 @@ def chart_country_ip_vs_em_stock_prices():
     plt.close(fig)
 
 
+def chart_komtrax_utilization():
+    """Komatsu KOMTRAX Monthly Equipment Utilization -- from download_komtrax_data.py
+
+    Shows monthly average hours of machine use per unit for 4 regions:
+    Japan, North America, Europe, Indonesia.
+    Two panels: (top) absolute usage hours time series, (bottom) YoY % change bars.
+    """
+    SAVE_PATH = Path(G_CHART_DIR) if 'G_CHART_DIR' in globals() else Path.cwd()
+    OUTFILE = SAVE_PATH / "Komtrax_Utilization.png"
+
+    raw_df = get_komtrax_data()
+    ts_df = get_komtrax_timeseries(raw_df)
+    yoy_df = get_komtrax_yoy(raw_df)
+
+    # Drop rows that are all-NaN (future months not yet released)
+    ts_df = ts_df.dropna(how='all')
+    yoy_df = yoy_df.dropna(how='all')
+
+    COLORS = {
+        "Japan": "#1f77b4",
+        "North America": "#ff7f0e",
+        "Europe": "#2ca02c",
+        "Indonesia": "#d62728",
+    }
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), height_ratios=[1.2, 1])
+
+    # --- Top panel: absolute usage hours ---
+    for region in ts_df.columns:
+        s = ts_df[region].dropna()
+        ax1.plot(s.index, s.values, lw=2.0, label=region, color=COLORS.get(region))
+        # Annotate last point
+        if not s.empty:
+            last_d, last_v = s.index[-1], s.iloc[-1]
+            ax1.scatter([last_d], [last_v], color=COLORS.get(region),
+                        edgecolor='white', linewidth=0.8, zorder=6)
+            ax1.annotate(f"{last_v:.1f}",
+                         xy=(last_d, last_v), xytext=(8, 0),
+                         textcoords='offset points', ha='left', va='center',
+                         color=COLORS.get(region), fontsize=8,
+                         bbox=dict(facecolor='white', edgecolor=COLORS.get(region),
+                                   alpha=0.85, boxstyle='round,pad=0.2'),
+                         zorder=7)
+
+    ax1.set_title("Komatsu KOMTRAX — Monthly Average Hours of Machine Use per Unit",
+                  fontsize=13)
+    ax1.set_ylabel("Hours / unit / month")
+    ax1.legend(loc='upper left', fontsize=9)
+    ax1.grid(True, linestyle=':', alpha=0.5)
+    ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%b\n%Y'))
+    plt.setp(ax1.get_xticklabels(), rotation=0, fontsize=8)
+
+    # --- Bottom panel: YoY % change bar chart ---
+    n_regions = len(yoy_df.columns)
+    bar_width = 15  # days
+    offsets = np.linspace(-(n_regions - 1) / 2, (n_regions - 1) / 2, n_regions) * bar_width
+
+    for i, region in enumerate(yoy_df.columns):
+        s = yoy_df[region].dropna()
+        dates = s.index + pd.Timedelta(days=offsets[i])
+        colors_bar = [COLORS.get(region, '#333333')] * len(s)
+        ax2.bar(dates, s.values, width=bar_width - 2, label=region,
+                color=colors_bar, alpha=0.75, edgecolor='white', linewidth=0.3)
+
+    ax2.axhline(0, color='black', lw=0.8)
+    ax2.set_title("YoY Monthly Change (%)", fontsize=12)
+    ax2.set_ylabel("YoY %")
+    ax2.legend(loc='lower left', fontsize=8, ncol=4)
+    ax2.grid(True, linestyle=':', alpha=0.4, axis='y')
+    ax2.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter('%b\n%Y'))
+    plt.setp(ax2.get_xticklabels(), rotation=0, fontsize=8)
+
+    # Last data date annotation
+    last_data_date = ts_df.dropna(how='all').index.max()
+    fig.text(0.98, 0.97, f"Last data: {pd.to_datetime(last_data_date).date()}",
+             ha='right', va='top', fontsize=10,
+             bbox=dict(facecolor='white', edgecolor='black', boxstyle='round,pad=0.25'))
+    fig.text(0.02, 0.01,
+             "Source: Komatsu KOMTRAX (excl. mini & mining equipment)",
+             ha='left', va='bottom', fontsize=8, style='italic', color='gray')
+
+    plt.tight_layout()
+    plt.savefig(OUTFILE, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved chart to: {OUTFILE}")
+
+
 # ==============================================================================
 # SECTION 5: CHART REGISTRY
 # ==============================================================================
@@ -9103,6 +9193,9 @@ CHART_REGISTRY = OrderedDict([
     ("NASDAQ Divergence",                              chart_nasdaq_divergence),
     ("China Domestic Credit Impulse",                  chart_china_domestic_credit_impulse),
     ("Country IP vs EM Stock Prices",                  chart_country_ip_vs_em_stock_prices),
+
+    # --- KOMTRAX utilization ---
+    ("Komatsu KOMTRAX Utilization",                    chart_komtrax_utilization),
 ])
 
 CHART_GROUPS = {
@@ -9184,6 +9277,7 @@ CHART_GROUPS = {
     # --- Charts that use CSV files or other non-Bloomberg / non-web sources ---
     "other": [
         "MAS DLI Charts",  # loads mas_dli_from_excel.csv + Bloomberg
+        "Komatsu KOMTRAX Utilization",  # Komatsu PDF / hardcoded fallback
     ],
 }
 

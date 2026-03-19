@@ -2588,6 +2588,58 @@ data_3y = pd.read_excel(Attatchment_Path, sheet_name="3Y", ...)
 | `CTAtickers2.csv` | Master ticker list (113 tickers) for CTA models | CTA_MomentumCalculator.py |
 | `mas_dli_from_excel.csv` | MAS DLI 3M change % | MAS_DLI_chart.py |
 | `cement_haver.xlsx` / `cemendatat_ceic.xlsx` | Cement production data | getter_cement.py |
+| `buffer_komtrax/komtrax_e.pdf` | Komatsu KOMTRAX utilization PDF | download_komtrax_data.py |
+
+---
+
+## 11. Komatsu KOMTRAX -- Equipment Utilization
+
+**Source:** Komatsu KOMTRAX system (IR website PDF)
+**What it provides:** Monthly average hours of machine use per unit of Komtrax-installed construction equipment (excluding mini and mining equipment) across 4 regions
+**URL:** `https://www.komatsu.jp/en/-/media/home/ir/library/demand-orders/en/komtrax_e.pdf`
+**Regions:** Japan, North America, Europe, Indonesia
+**Data format:** PDF with side-by-side table; two fiscal year columns ([A] prior year, [B] current year) plus YoY % change
+**Fiscal year:** March to February (e.g. 25/03-26/02)
+
+### Metrics
+
+| Column | Description |
+|--------|-------------|
+| `[A] 24/03-25/02` | Prior fiscal year monthly avg hours |
+| `[B] 25/03-26/02` | Current fiscal year monthly avg hours |
+| `[A] vs [B]` | YoY monthly change (%) |
+
+### Code Pattern
+
+From `charts/ChartUpdate/download_komtrax_data.py`:
+
+```python
+from download_komtrax_data import get_komtrax_data, get_komtrax_timeseries, get_komtrax_yoy
+
+# Raw table data
+df = get_komtrax_data()  # Returns DataFrame: Region, Month, Date_A/B, Hours_A/B, YoY_pct
+
+# Time series (wide format, indexed by Date, one column per region)
+ts = get_komtrax_timeseries()
+
+# YoY % change for current fiscal year
+yoy = get_komtrax_yoy()
+```
+
+**Features:** PDF download with retry/backoff (pdfplumber parser), pickle cache (30-day validity), hardcoded fallback data from latest known PDF snapshot
+**Buffer directory:** `charts/ChartUpdate/buffer_komtrax/`
+
+### Notes
+
+- Data is updated monthly by Komatsu
+- "Excluding those units which we were unable to contact via Komtrax"
+- "Including those units which show zero monthly hours of machine use"
+- Indonesia hours (~190-220) are significantly higher than developed markets (~40-75) due to longer operating hours in mining-adjacent construction
+
+### Files
+
+- `charts/ChartUpdate/download_komtrax_data.py` -- Full download/parse/cache module
+- `charts/ChartUpdate/charts_updater_all.py` -- Consumer (`chart_komtrax_utilization()`)
 
 ---
 
@@ -2610,3 +2662,4 @@ data_3y = pd.read_excel(Attatchment_Path, sheet_name="3Y", ...)
 | Wikipedia | HTTP + BS4 | S&P 500 constituents | Sentiment Breadth.ipynb |
 | MAS DLI | Local CSV | Singapore DLI index | MAS_DLI_chart.py |
 | Samsung Securities | Outlook email | KTB futures positioning | Ktb_Future_Position_Monitor.py |
+| Komatsu KOMTRAX | PDF download | Equipment utilization hours (4 regions) | download_komtrax_data.py |
