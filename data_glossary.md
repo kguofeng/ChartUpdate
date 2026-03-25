@@ -65,6 +65,7 @@ Organized by **Region > Country > Asset Class (Market / Econ)**.
 | USGGBE10 Index | UST 10Y Breakeven | Inflation | Daily, yield % |
 | H15T10Y Index | H.15 10Y Treasury Yield | Govt Yield | Daily, yield % |
 | H15T3Y Index | H.15 3Y Treasury Yield | Govt Yield | Daily, yield % |
+| USSWIT1 Curncy | US 1Y Inflation Swap | Inflation Swap | Daily, rate % |
 | USSWIT2 Curncy | US 2Y Inflation Swap | Inflation Swap | Daily, rate % |
 | USSWIT5 Curncy | US 5Y Inflation Swap | Inflation Swap | Daily, rate % |
 | USSWIT10 Curncy | US 10Y Inflation Swap | Inflation Swap | Daily, rate % |
@@ -84,6 +85,9 @@ Organized by **Region > Country > Asset Class (Market / Econ)**.
 | ALBNSCBC Index | Commercial Banks Securities Holdings | Banking | Monthly, level |
 | GDP CUR$ Index | US Total Public Debt Outstanding | Govt | Quarterly, USD mn |
 | GDP CURY Index | US Nominal GDP Annual | Econ | Annual, USD mn |
+| ILM3NAVG Index | US 30Y Mortgage Rate (MBA/Bankrate avg) | Rates | Weekly, rate % |
+| XBA Comdty | RBOB Gasoline Futures (generic 1st) | Commodity | Daily, USD/gal |
+| RCPPTAPP Index | RealClearPolitics Presidential Approval Rate | Sentiment | Daily, % |
 
 ### US -- Econ
 

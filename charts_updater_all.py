@@ -8976,6 +8976,147 @@ def chart_country_ip_vs_em_stock_prices():
     plt.close(fig)
 
 
+def chart_trump_pain_point_index():
+    """Trump Pain Point Index — standardised simple average of 1-month change in
+    6 components: S&P 500 (inverted), 10Y Treasury yield, 30Y mortgage rate,
+    gasoline futures, 1Y CPI swap, and presidential approval (inverted).
+
+    Higher index = more pain (lower stocks, higher yields/rates/gas, lower approval).
+    """
+    END_DATE = datetime.today()
+    START_DATE = datetime(2017, 1, 1)   # Trump-era coverage
+    SAVE_PATH = Path(G_CHART_DIR) if 'G_CHART_DIR' in globals() else Path.cwd()
+    OUTFILE = SAVE_PATH / "Trump_Pain_Point_Index.png"
+
+    # ── tickers ──
+    TICKERS = {
+        'SPX Index':        'S&P 500',
+        'USGG10YR Index':   '10Y Treasury Yield',
+        'ILM3NAVG Index':   '30Y Mortgage Rate',
+        'XBA Comdty':       'Gasoline Futures',
+        'USSWIT1 Curncy':   '1Y CPI Swap',
+        'RCPPTAPP Index':   'Approval Rate',
+    }
+
+    # Components where a *rise* means *less* pain → flip sign
+    INVERT = {'SPX Index', 'RCPPTAPP Index'}
+
+    # ── pull data ──
+    try:
+        raw = blp.bdh(tickers=list(TICKERS.keys()), flds='PX_LAST',
+                      start_date=START_DATE, end_date=END_DATE)
+    except TypeError:
+        raw = blp.bdh(tickers=list(TICKERS.keys()), flds='PX_LAST',
+                      start_date=START_DATE, end_date=END_DATE,
+                      periodicitySelection='DAILY')
+
+    if isinstance(raw.columns, pd.MultiIndex):
+        if 'PX_LAST' in raw.columns.get_level_values(-1):
+            df = raw.xs('PX_LAST', level=-1, axis=1)
+        else:
+            df = raw.xs('PX_LAST', level=0, axis=1)
+    else:
+        df = raw.copy()
+
+    df.index = pd.to_datetime(df.index)
+    df = df.apply(pd.to_numeric, errors='coerce')
+    df = df.sort_index()
+
+    # ── 1-month (21 business-day) change ──
+    chg = df.diff(21)
+
+    # ── standardise each component (rolling 1Y z-score) ──
+    z = pd.DataFrame(index=chg.index)
+    for ticker in TICKERS:
+        s = chg[ticker] if ticker in chg.columns else pd.Series(dtype=float)
+        if s.empty:
+            continue
+        roll_mean = s.rolling(252, min_periods=63).mean()
+        roll_std  = s.rolling(252, min_periods=63).std()
+        z_score = (s - roll_mean) / roll_std
+        # Invert components where a rise = less pain
+        if ticker in INVERT:
+            z_score = -z_score
+        z[ticker] = z_score
+
+    # ── composite index: simple average of available z-scores ──
+    pain_index = z.mean(axis=1)
+    pain_index.name = 'Trump Pain Point Index'
+
+    # trim to where we have enough data for z-scores
+    pain_index = pain_index.dropna()
+    if pain_index.empty:
+        print("WARNING: No valid data for Trump Pain Point Index")
+        return
+
+    # ── plot ──
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), height_ratios=[1.4, 1],
+                                    gridspec_kw={'hspace': 0.30})
+
+    # --- Top panel: composite index ---
+    ax1.fill_between(pain_index.index, 0, pain_index.values,
+                     where=(pain_index.values >= 0), color='#d62728', alpha=0.35,
+                     interpolate=True, label='Pain (above 0)')
+    ax1.fill_between(pain_index.index, 0, pain_index.values,
+                     where=(pain_index.values < 0), color='#2ca02c', alpha=0.35,
+                     interpolate=True, label='Relief (below 0)')
+    ax1.plot(pain_index.index, pain_index.values, color='black', lw=1.5)
+    ax1.axhline(0, color='black', lw=0.8, ls='--')
+    ax1.set_title('Trump Pain Point Index\n'
+                  '(standardised avg of 1M chg: SPX, 10Y yield, 30Y mortgage, '
+                  'gasoline, 1Y CPI swap, approval rate)',
+                  fontsize=12)
+    ax1.set_ylabel('Composite z-score')
+    ax1.legend(loc='upper left', fontsize=8)
+    ax1.grid(True, ls=':', alpha=0.4)
+
+    # annotate last value
+    last_d = pain_index.index[-1]
+    last_v = pain_index.iloc[-1]
+    ax1.scatter([last_d], [last_v], color='black', zorder=6, s=30)
+    ax1.annotate(f'{last_v:+.2f}', xy=(last_d, last_v), xytext=(10, 0),
+                 textcoords='offset points', ha='left', va='center', fontsize=9,
+                 bbox=dict(facecolor='white', edgecolor='black', alpha=0.85,
+                           boxstyle='round,pad=0.2'), zorder=7)
+
+    ax1.xaxis.set_major_locator(mdates.YearLocator())
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+
+    # --- Bottom panel: individual component z-scores ---
+    COMP_COLORS = {
+        'SPX Index':        '#1f77b4',
+        'USGG10YR Index':   '#ff7f0e',
+        'ILM3NAVG Index':   '#2ca02c',
+        'XBA Comdty':       '#d62728',
+        'USSWIT1 Curncy':   '#9467bd',
+        'RCPPTAPP Index':   '#8c564b',
+    }
+    for ticker in z.columns:
+        s = z[ticker].dropna()
+        label = TICKERS.get(ticker, ticker)
+        if ticker in INVERT:
+            label += ' (inv.)'
+        ax2.plot(s.index, s.values, lw=1.2, alpha=0.8, label=label,
+                 color=COMP_COLORS.get(ticker, None))
+
+    ax2.axhline(0, color='black', lw=0.8, ls='--')
+    ax2.set_title('Individual Component z-scores (1M change, rolling 1Y standardisation)',
+                  fontsize=11)
+    ax2.set_ylabel('z-score')
+    ax2.legend(loc='upper left', fontsize=7, ncol=3)
+    ax2.grid(True, ls=':', alpha=0.4)
+    ax2.xaxis.set_major_locator(mdates.YearLocator())
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+
+    fig.text(0.98, 0.97, f'Last data: {last_d.date()}',
+             ha='right', va='top', fontsize=10,
+             bbox=dict(facecolor='white', edgecolor='black', boxstyle='round,pad=0.25'))
+
+    plt.savefig(OUTFILE, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f'Saved chart to: {OUTFILE}')
+
+
 def chart_komtrax_utilization():
     """Komatsu KOMTRAX Monthly Equipment Utilization -- from download_komtrax_data.py
 
@@ -9194,6 +9335,9 @@ CHART_REGISTRY = OrderedDict([
     ("China Domestic Credit Impulse",                  chart_china_domestic_credit_impulse),
     ("Country IP vs EM Stock Prices",                  chart_country_ip_vs_em_stock_prices),
 
+    # --- Trump Pain Point Index ---
+    ("Trump Pain Point Index",                         chart_trump_pain_point_index),
+
     # --- KOMTRAX utilization ---
     ("Komatsu KOMTRAX Utilization",                    chart_komtrax_utilization),
 ])
@@ -9255,6 +9399,7 @@ CHART_GROUPS = {
         "NASDAQ Divergence",
         "China Domestic Credit Impulse",
         "Country IP vs EM Stock Prices",
+        "Trump Pain Point Index",
     ],
     # --- Charts that use intraday Bloomberg data (blp.bdib) ---
     "intraday_bbg": [
